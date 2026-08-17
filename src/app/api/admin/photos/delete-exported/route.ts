@@ -1,0 +1,21 @@
+import fs from "node:fs/promises";
+import { NextResponse } from "next/server";
+import { isAdmin } from "@/lib/security";
+import { prisma } from "@/lib/prisma";
+
+export const runtime = "nodejs";
+
+export async function POST() {
+  if (!(await isAdmin())) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const photos = await prisma.reportPhoto.findMany({
+    where: { deletedAt: null, report: { exportedAt: { not: null } } },
+    select: { id: true, filePath: true },
+  });
+  let deleted = 0;
+  for (const photo of photos) {
+    try { await fs.rm(photo.filePath, { force: true }); } catch { continue; }
+    await prisma.reportPhoto.update({ where: { id: photo.id }, data: { deletedAt: new Date() } });
+    deleted += 1;
+  }
+  return NextResponse.json({ ok: true, deleted });
+}
