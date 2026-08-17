@@ -1,6 +1,7 @@
 "use client";
 
-import { CircleMarker, MapContainer, Popup, TileLayer } from "react-leaflet";
+import { useEffect } from "react";
+import { CircleMarker, MapContainer, Popup, TileLayer, useMap } from "react-leaflet";
 import type { MapTask } from "@/components/map/types";
 
 const colors: Record<MapTask["status"], string> = {
@@ -11,20 +12,46 @@ const colors: Record<MapTask["status"], string> = {
   REJECTED: "#ef5b5b",
 };
 
-export function AgitMap({ tasks, selectedId, onSelect }: { tasks: MapTask[]; selectedId?: string; onSelect: (id: string) => void }) {
+function Viewport({ tasks, selectedId, userLocation }: { tasks: MapTask[]; selectedId?: string; userLocation?: { lat: number; lon: number } }) {
+  const map = useMap();
+
+  useEffect(() => {
+    const selected = tasks.find((task) => task.id === selectedId);
+    if (selected) map.flyTo([selected.lat, selected.lon], Math.max(map.getZoom(), 16), { duration: .45 });
+  }, [map, selectedId, tasks]);
+
+  useEffect(() => {
+    if (userLocation) map.flyTo([userLocation.lat, userLocation.lon], Math.max(map.getZoom(), 16), { duration: .45 });
+  }, [map, userLocation]);
+
+  return null;
+}
+
+export function AgitMap({ tasks, selectedId, onSelect, userLocation }: {
+  tasks: MapTask[];
+  selectedId?: string;
+  onSelect: (id: string) => void;
+  userLocation?: { lat: number; lon: number };
+}) {
   const center: [number, number] = tasks.length ? [tasks[0].lat, tasks[0].lon] : [57.591, 34.563];
   return (
-    <MapContainer center={center} zoom={14} scrollWheelZoom zoomControl>
+    <MapContainer center={center} zoom={15} scrollWheelZoom zoomControl>
       <TileLayer
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
+      <Viewport tasks={tasks} selectedId={selectedId} userLocation={userLocation} />
+      {userLocation && (
+        <CircleMarker center={[userLocation.lat, userLocation.lon]} radius={9} pathOptions={{ color: "#ffffff", fillColor: "#3478f6", fillOpacity: 1, weight: 3 }}>
+          <Popup><strong>Вы здесь</strong></Popup>
+        </CircleMarker>
+      )}
       {tasks.map((task) => (
         <CircleMarker
           key={task.id}
           center={[task.lat, task.lon]}
           radius={selectedId === task.id ? 11 : 8}
-          pathOptions={{ color: colors[task.status], fillColor: colors[task.status], fillOpacity: .92, weight: selectedId === task.id ? 4 : 2 }}
+          pathOptions={{ color: selectedId === task.id ? "#ffffff" : colors[task.status], fillColor: colors[task.status], fillOpacity: .94, weight: selectedId === task.id ? 4 : 2 }}
           eventHandlers={{ click: () => onSelect(task.id) }}
         >
           <Popup>
