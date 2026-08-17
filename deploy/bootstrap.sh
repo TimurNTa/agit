@@ -41,8 +41,6 @@ else
   git clone --depth 1 "$REPO" "$APP_DIR"
 fi
 
-# Берём локальную копию компонентов карты из «Округ Онлайн» только как reference.
-# Рабочий проект не изменяется, а reference/ исключён из Git.
 if [[ -d "$OKRUG_MAP_SOURCE" ]]; then
   mkdir -p "$APP_DIR/reference"
   rm -rf "$APP_DIR/reference/okrug-map"
@@ -51,21 +49,14 @@ if [[ -d "$OKRUG_MAP_SOURCE" ]]; then
 fi
 
 ENV_FILE="$APP_DIR/.env"
+FIRST_INSTALL=0
 if [[ ! -f "$ENV_FILE" ]]; then
-  DB_PASS="$(openssl rand -hex 24)"
+  FIRST_INSTALL=1
   SESSION_SECRET="$(openssl rand -hex 48)"
-  if ! runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='agit'" | grep -q 1; then
-    runuser -u postgres -- psql -v ON_ERROR_STOP=1 -c "CREATE ROLE agit LOGIN PASSWORD '$DB_PASS';"
-  else
-    runuser -u postgres -- psql -v ON_ERROR_STOP=1 -c "ALTER ROLE agit WITH PASSWORD '$DB_PASS';"
-  fi
-  if ! runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_database WHERE datname='agit'" | grep -q 1; then
-    runuser -u postgres -- createdb -O agit agit
-  fi
   cat > "$ENV_FILE" <<ENV
 NODE_ENV=production
 APP_URL=https://$DOMAIN
-DATABASE_URL=postgresql://agit:$DB_PASS@127.0.0.1:5432/agit
+DATABASE_URL=
 PHOTO_STORAGE_ROOT=$PHOTO_DIR
 MAX_REPORT_DISTANCE_METERS=150
 VK_API_VERSION=5.199
@@ -78,8 +69,43 @@ ADMIN_PASSWORD=CHANGE_ME_NOW
 SESSION_SECRET=$SESSION_SECRET
 ENV
   chmod 600 "$ENV_FILE"
+fi
+
+# Всегда синхронизируем пароль роли и DATABASE_URL. Это делает повторный запуск
+# самовосстанавливающимся после неудачной первичной установки или ручной смены роли.
+DB_PASS="$(openssl rand -hex 24)"
+if ! runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='agit'" | grep -q 1; then
+  runuser -u postgres -- psql -v ON_ERROR_STOP=1 -c "CREATE ROLE agit LOGIN PASSWORD '$DB_PASS';"
+else
+  runuser -u postgres -- psql -v ON_ERROR_STOP=1 -c "ALTER ROLE agit WITH LOGIN PASSWORD '$DB_PASS';"
+fi
+if ! runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_database WHERE datname='agit'" | grep -q 1; then
+  runuser -u postgres -- createdb -O agit agit
+else
+  runuser -u postgres -- psql -v ON_ERROR_STOP=1 -c "ALTER DATABASE agit OWNER TO agit;"
+fi
+
+NEW_DB_URL="postgresql://agit:${DB_PASS}@127.0.0.1:5432/agit"
+if grep -q '^DATABASE_URL=' "$ENV_FILE"; then
+  sed -i "s#^DATABASE_URL=.*#DATABASE_URL=${NEW_DB_URL}#" "$ENV_FILE"
+else
+  printf '\nDATABASE_URL=%s\n' "$NEW_DB_URL" >> "$ENV_FILE"
+fi
+chmod 600 "$ENV_FILE"
+
+if ! PGPASSWORD="$DB_PASS" psql -h 127.0.0.1 -p 5432 -U agit -d agit -tAc 'SELECT 1' | grep -q 1; then
+  echo >&2
+  echo "Ошибка: локальный PostgreSQL не принимает созданные credentials по 127.0.0.1:5432." >&2
+  echo "Диагностика PostgreSQL:" >&2
+  pg_lsclusters 2>/dev/null || true
+  ss -lntp 2>/dev/null | grep ':5432' || true
+  exit 1
+fi
+echo "PostgreSQL: TCP-аутентификация agit подтверждена."
+
+if [[ "$FIRST_INSTALL" -eq 1 ]]; then
   echo
-  echo "Создан $ENV_FILE. Перед запуском VK Callback заполни VK_GROUP_TOKEN, VK_CALLBACK_SECRET, VK_CONFIRMATION_TOKEN и замени ADMIN_PASSWORD."
+  echo "Создан $ENV_FILE. После сборки заполни VK_GROUP_TOKEN, VK_CALLBACK_SECRET, VK_CONFIRMATION_TOKEN и замени ADMIN_PASSWORD."
 fi
 
 cd "$APP_DIR"
