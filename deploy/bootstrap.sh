@@ -71,21 +71,31 @@ ENV
   chmod 600 "$ENV_FILE"
 fi
 
-# Всегда синхронизируем пароль роли и DATABASE_URL. Это делает повторный запуск
-# самовосстанавливающимся после неудачной первичной установки или ручной смены роли.
-DB_PASS="$(openssl rand -hex 24)"
-if ! runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='agit'" | grep -q 1; then
-  runuser -u postgres -- psql -v ON_ERROR_STOP=1 -c "CREATE ROLE agit LOGIN PASSWORD '$DB_PASS';"
-else
-  runuser -u postgres -- psql -v ON_ERROR_STOP=1 -c "ALTER ROLE agit WITH LOGIN PASSWORD '$DB_PASS';"
+# На сервере порт 5432 может быть занят Docker-контейнером. Берём порт именно
+# системного online-кластера PostgreSQL и используем его во всех командах.
+PG_PORT="$(pg_lsclusters --no-header 2>/dev/null | awk '$4 == "online" { print $3; exit }')"
+if [[ -z "$PG_PORT" ]]; then
+  echo "Ошибка: не найден online-кластер системного PostgreSQL." >&2
+  pg_lsclusters 2>/dev/null || true
+  exit 1
 fi
-if ! runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_database WHERE datname='agit'" | grep -q 1; then
-  runuser -u postgres -- createdb -O agit agit
+echo "PostgreSQL: системный кластер обнаружен на порту $PG_PORT."
+
+# Всегда синхронизируем пароль роли и DATABASE_URL. Это делает повторный запуск
+# самовосстанавливающимся после неудачной установки или ручной смены роли.
+DB_PASS="$(openssl rand -hex 24)"
+if ! runuser -u postgres -- psql -p "$PG_PORT" -tAc "SELECT 1 FROM pg_roles WHERE rolname='agit'" | grep -q 1; then
+  runuser -u postgres -- psql -p "$PG_PORT" -v ON_ERROR_STOP=1 -c "CREATE ROLE agit LOGIN PASSWORD '$DB_PASS';"
 else
-  runuser -u postgres -- psql -v ON_ERROR_STOP=1 -c "ALTER DATABASE agit OWNER TO agit;"
+  runuser -u postgres -- psql -p "$PG_PORT" -v ON_ERROR_STOP=1 -c "ALTER ROLE agit WITH LOGIN PASSWORD '$DB_PASS';"
+fi
+if ! runuser -u postgres -- psql -p "$PG_PORT" -tAc "SELECT 1 FROM pg_database WHERE datname='agit'" | grep -q 1; then
+  runuser -u postgres -- createdb -p "$PG_PORT" -O agit agit
+else
+  runuser -u postgres -- psql -p "$PG_PORT" -v ON_ERROR_STOP=1 -c "ALTER DATABASE agit OWNER TO agit;"
 fi
 
-NEW_DB_URL="postgresql://agit:${DB_PASS}@127.0.0.1:5432/agit"
+NEW_DB_URL="postgresql://agit:${DB_PASS}@127.0.0.1:${PG_PORT}/agit"
 if grep -q '^DATABASE_URL=' "$ENV_FILE"; then
   sed -i "s#^DATABASE_URL=.*#DATABASE_URL=${NEW_DB_URL}#" "$ENV_FILE"
 else
@@ -93,15 +103,15 @@ else
 fi
 chmod 600 "$ENV_FILE"
 
-if ! PGPASSWORD="$DB_PASS" psql -h 127.0.0.1 -p 5432 -U agit -d agit -tAc 'SELECT 1' | grep -q 1; then
+if ! PGPASSWORD="$DB_PASS" psql -h 127.0.0.1 -p "$PG_PORT" -U agit -d agit -tAc 'SELECT 1' | grep -q 1; then
   echo >&2
-  echo "Ошибка: локальный PostgreSQL не принимает созданные credentials по 127.0.0.1:5432." >&2
+  echo "Ошибка: системный PostgreSQL не принимает созданные credentials по 127.0.0.1:${PG_PORT}." >&2
   echo "Диагностика PostgreSQL:" >&2
   pg_lsclusters 2>/dev/null || true
-  ss -lntp 2>/dev/null | grep ':5432' || true
+  ss -lntp 2>/dev/null | grep ":${PG_PORT}" || true
   exit 1
 fi
-echo "PostgreSQL: TCP-аутентификация agit подтверждена."
+echo "PostgreSQL: TCP-аутентификация agit подтверждена на порту $PG_PORT."
 
 if [[ "$FIRST_INSTALL" -eq 1 ]]; then
   echo
@@ -179,6 +189,7 @@ echo "Админка: https://$DOMAIN/admin"
 echo "VK Callback: https://$DOMAIN/api/vk/callback"
 echo "ENV: $ENV_FILE"
 echo "Фото: $PHOTO_DIR"
+echo "PostgreSQL: 127.0.0.1:$PG_PORT"
 if [[ -d "$APP_DIR/reference/okrug-map" ]]; then
   echo "Карта Округ Онлайн (reference): $APP_DIR/reference/okrug-map"
 fi
