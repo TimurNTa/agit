@@ -42,8 +42,6 @@ else
   git clone --depth 1 "$REPO" "$APP_DIR"
 fi
 
-# Старый reference внутри проекта мешал TypeScript/Next.js сборке. Удаляем его
-# и держим снимок карты «Округ Онлайн» отдельно от исходников AGIT.
 rm -rf "$APP_DIR/reference"
 if [[ -d "$OKRUG_MAP_SOURCE" ]]; then
   rm -rf "$OKRUG_MAP_REFERENCE"
@@ -75,8 +73,6 @@ ENV
   chmod 600 "$ENV_FILE"
 fi
 
-# На сервере порт 5432 может быть занят Docker-контейнером. Берём порт именно
-# системного online-кластера PostgreSQL и используем его во всех командах.
 PG_PORT="$(pg_lsclusters --no-header 2>/dev/null | awk '$4 == "online" { print $3; exit }')"
 if [[ -z "$PG_PORT" ]]; then
   echo "Ошибка: не найден online-кластер системного PostgreSQL." >&2
@@ -85,9 +81,17 @@ if [[ -z "$PG_PORT" ]]; then
 fi
 echo "PostgreSQL: системный кластер обнаружен на порту $PG_PORT."
 
-# Всегда синхронизируем пароль роли и DATABASE_URL. Это делает повторный запуск
-# самовосстанавливающимся после неудачной установки или ручной смены роли.
-DB_PASS="$(openssl rand -hex 24)"
+# Пароль базы создаётся один раз. На следующих деплоях сохраняем его,
+# чтобы уже запущенное приложение и новый .env никогда не расходились.
+EXISTING_DB_URL="$(grep '^DATABASE_URL=' "$ENV_FILE" | head -n1 | cut -d= -f2- || true)"
+DB_PASS=""
+if [[ "$EXISTING_DB_URL" =~ ^postgresql://agit:([A-Za-z0-9]+)@127\.0\.0\.1:[0-9]+/agit$ ]]; then
+  DB_PASS="${BASH_REMATCH[1]}"
+fi
+if [[ -z "$DB_PASS" ]]; then
+  DB_PASS="$(openssl rand -hex 24)"
+fi
+
 if ! runuser -u postgres -- psql -p "$PG_PORT" -tAc "SELECT 1 FROM pg_roles WHERE rolname='agit'" | grep -q 1; then
   runuser -u postgres -- psql -p "$PG_PORT" -v ON_ERROR_STOP=1 -c "CREATE ROLE agit LOGIN PASSWORD '$DB_PASS';"
 else
@@ -109,8 +113,7 @@ chmod 600 "$ENV_FILE"
 
 if ! PGPASSWORD="$DB_PASS" psql -h 127.0.0.1 -p "$PG_PORT" -U agit -d agit -tAc 'SELECT 1' | grep -q 1; then
   echo >&2
-  echo "Ошибка: системный PostgreSQL не принимает созданные credentials по 127.0.0.1:${PG_PORT}." >&2
-  echo "Диагностика PostgreSQL:" >&2
+  echo "Ошибка: системный PostgreSQL не принимает credentials по 127.0.0.1:${PG_PORT}." >&2
   pg_lsclusters 2>/dev/null || true
   ss -lntp 2>/dev/null | grep ":${PG_PORT}" || true
   exit 1
@@ -178,8 +181,20 @@ NGINX
 ln -sfn /etc/nginx/sites-available/agit /etc/nginx/sites-enabled/agit
 nginx -t
 systemctl daemon-reload
-systemctl enable --now "$SERVICE"
+systemctl enable "$SERVICE" >/dev/null
+# Важно: именно restart, а не enable --now. Так процесс всегда перечитывает
+# новый код и EnvironmentFile после каждого деплоя.
+systemctl restart "$SERVICE"
 systemctl reload nginx
+
+sleep 2
+if ! curl -fsS --max-time 10 "http://127.0.0.1:${PORT}/api/health" >/dev/null; then
+  echo "Ошибка: AGIT не прошёл локальный health-check после перезапуска." >&2
+  systemctl status "$SERVICE" --no-pager -l >&2 || true
+  journalctl -u "$SERVICE" -n 80 --no-pager >&2 || true
+  exit 1
+fi
+echo "AGIT: сервис перезапущен, health-check успешен."
 
 if getent ahostsv4 "$DOMAIN" >/dev/null 2>&1; then
   certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos --register-unsafely-without-email --redirect || true
