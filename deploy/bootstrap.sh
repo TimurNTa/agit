@@ -8,6 +8,7 @@ PHOTO_DIR="/var/lib/agit/photos"
 SERVICE="agit"
 PORT="3310"
 OKRUG_MAP_SOURCE="/var/www/volochek69-online/frontend/src/components/map"
+OKRUG_MAP_REFERENCE="/var/lib/agit/reference/okrug-map"
 
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   echo "Запусти команду от root." >&2
@@ -29,7 +30,7 @@ if (( NODE_MAJOR < 22 || (NODE_MAJOR == 22 && NODE_MINOR < 12) )); then
   exit 1
 fi
 
-mkdir -p "$(dirname "$APP_DIR")" "$PHOTO_DIR"
+mkdir -p "$(dirname "$APP_DIR")" "$PHOTO_DIR" "$(dirname "$OKRUG_MAP_REFERENCE")"
 chmod 750 "$PHOTO_DIR"
 chown www-data:www-data "$PHOTO_DIR"
 
@@ -41,11 +42,14 @@ else
   git clone --depth 1 "$REPO" "$APP_DIR"
 fi
 
+# Старый reference внутри проекта мешал TypeScript/Next.js сборке. Удаляем его
+# и держим снимок карты «Округ Онлайн» отдельно от исходников AGIT.
+rm -rf "$APP_DIR/reference"
 if [[ -d "$OKRUG_MAP_SOURCE" ]]; then
-  mkdir -p "$APP_DIR/reference"
-  rm -rf "$APP_DIR/reference/okrug-map"
-  cp -a "$OKRUG_MAP_SOURCE" "$APP_DIR/reference/okrug-map"
-  echo "Снимок карты Округ Онлайн: $APP_DIR/reference/okrug-map"
+  rm -rf "$OKRUG_MAP_REFERENCE"
+  mkdir -p "$(dirname "$OKRUG_MAP_REFERENCE")"
+  cp -a "$OKRUG_MAP_SOURCE" "$OKRUG_MAP_REFERENCE"
+  echo "Снимок карты Округ Онлайн: $OKRUG_MAP_REFERENCE"
 fi
 
 ENV_FILE="$APP_DIR/.env"
@@ -190,8 +194,8 @@ echo "VK Callback: https://$DOMAIN/api/vk/callback"
 echo "ENV: $ENV_FILE"
 echo "Фото: $PHOTO_DIR"
 echo "PostgreSQL: 127.0.0.1:$PG_PORT"
-if [[ -d "$APP_DIR/reference/okrug-map" ]]; then
-  echo "Карта Округ Онлайн (reference): $APP_DIR/reference/okrug-map"
+if [[ -d "$OKRUG_MAP_REFERENCE" ]]; then
+  echo "Карта Округ Онлайн (reference): $OKRUG_MAP_REFERENCE"
 fi
 echo "Статус: systemctl status $SERVICE --no-pager"
 echo "========================================"
