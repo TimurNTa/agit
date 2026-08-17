@@ -7,6 +7,7 @@ APP_DIR="/var/www/agit"
 PHOTO_DIR="/var/lib/agit/photos"
 SERVICE="agit"
 PORT="3310"
+OKRUG_MAP_SOURCE="/var/www/volochek69-online/frontend/src/components/map"
 
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   echo "Запусти команду от root." >&2
@@ -40,17 +41,26 @@ else
   git clone --depth 1 "$REPO" "$APP_DIR"
 fi
 
+# Берём локальную копию компонентов карты из «Округ Онлайн» только как reference.
+# Рабочий проект не изменяется, а reference/ исключён из Git.
+if [[ -d "$OKRUG_MAP_SOURCE" ]]; then
+  mkdir -p "$APP_DIR/reference"
+  rm -rf "$APP_DIR/reference/okrug-map"
+  cp -a "$OKRUG_MAP_SOURCE" "$APP_DIR/reference/okrug-map"
+  echo "Снимок карты Округ Онлайн: $APP_DIR/reference/okrug-map"
+fi
+
 ENV_FILE="$APP_DIR/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
   DB_PASS="$(openssl rand -hex 24)"
   SESSION_SECRET="$(openssl rand -hex 48)"
-  if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='agit'" | grep -q 1; then
-    sudo -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE ROLE agit LOGIN PASSWORD '$DB_PASS';"
+  if ! runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='agit'" | grep -q 1; then
+    runuser -u postgres -- psql -v ON_ERROR_STOP=1 -c "CREATE ROLE agit LOGIN PASSWORD '$DB_PASS';"
   else
-    sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER ROLE agit WITH PASSWORD '$DB_PASS';"
+    runuser -u postgres -- psql -v ON_ERROR_STOP=1 -c "ALTER ROLE agit WITH PASSWORD '$DB_PASS';"
   fi
-  if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='agit'" | grep -q 1; then
-    sudo -u postgres createdb -O agit agit
+  if ! runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_database WHERE datname='agit'" | grep -q 1; then
+    runuser -u postgres -- createdb -O agit agit
   fi
   cat > "$ENV_FILE" <<ENV
 NODE_ENV=production
@@ -143,5 +153,8 @@ echo "Админка: https://$DOMAIN/admin"
 echo "VK Callback: https://$DOMAIN/api/vk/callback"
 echo "ENV: $ENV_FILE"
 echo "Фото: $PHOTO_DIR"
+if [[ -d "$APP_DIR/reference/okrug-map" ]]; then
+  echo "Карта Округ Онлайн (reference): $APP_DIR/reference/okrug-map"
+fi
 echo "Статус: systemctl status $SERVICE --no-pager"
 echo "========================================"
