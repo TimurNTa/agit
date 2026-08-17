@@ -1,0 +1,128 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum AssignmentStatus {
+  TODO
+  ACTIVE
+  SUBMITTED
+  ACCEPTED
+  REJECTED
+}
+
+enum ReportStatus {
+  DRAFT
+  SUBMITTED
+  ACCEPTED
+  REJECTED
+}
+
+model Agitator {
+  id          String       @id @default(cuid())
+  vkId        BigInt       @unique
+  name        String
+  active      Boolean      @default(true)
+  assignments Assignment[]
+  reports     Report[]
+  sessions    WebSession[]
+  loginTokens LoginToken[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
+
+model House {
+  id          String       @id @default(cuid())
+  address     String
+  lat         Float
+  lon         Float
+  note        String?
+  assignments Assignment[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([address])
+}
+
+model Assignment {
+  id         String           @id @default(cuid())
+  agitatorId String
+  houseId    String
+  campaign   String           @default("2026")
+  status     AssignmentStatus @default(TODO)
+  agitator   Agitator         @relation(fields: [agitatorId], references: [id], onDelete: Cascade)
+  house      House            @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  reports    Report[]
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  @@unique([houseId, campaign])
+  @@index([agitatorId, status])
+}
+
+model Report {
+  id             String       @id @default(cuid())
+  assignmentId   String
+  agitatorId     String
+  lat            Float
+  lon            Float
+  accuracyMeters Float?
+  distanceMeters Int
+  status         ReportStatus @default(DRAFT)
+  vkMessageId    Int?
+  exportedAt     DateTime?
+  assignment     Assignment   @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  agitator       Agitator     @relation(fields: [agitatorId], references: [id], onDelete: Cascade)
+  photos         ReportPhoto[]
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([agitatorId, status, createdAt])
+  @@index([assignmentId, createdAt])
+}
+
+model ReportPhoto {
+  id        String   @id @default(cuid())
+  reportId  String
+  filePath  String
+  mimeType  String
+  sizeBytes Int
+  sha256    String
+  deletedAt DateTime?
+  report    Report   @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@index([reportId, deletedAt])
+  @@unique([reportId, sha256])
+}
+
+model LoginToken {
+  id         String    @id @default(cuid())
+  agitatorId String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  consumedAt DateTime?
+  agitator   Agitator  @relation(fields: [agitatorId], references: [id], onDelete: Cascade)
+  createdAt  DateTime  @default(now())
+}
+
+model WebSession {
+  id         String   @id @default(cuid())
+  agitatorId String
+  tokenHash  String   @unique
+  expiresAt  DateTime
+  agitator   Agitator @relation(fields: [agitatorId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@index([agitatorId, expiresAt])
+}
+
+model VkEvent {
+  eventId   String   @id
+  eventType String
+  createdAt DateTime @default(now())
+}
