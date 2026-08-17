@@ -24,14 +24,30 @@ export function AdminDashboard() {
   const [needsLogin, setNeedsLogin] = useState(false);
   const [password, setPassword] = useState("");
   const [notice, setNotice] = useState<string>();
+  const [loadError, setLoadError] = useState<string>();
   const [coords, setCoords] = useState<{ lat: number; lon: number } | null>(null);
   const [tab, setTab] = useState<Tab>("map");
 
   async function load() {
-    const response = await fetch("/api/admin/data", { cache: "no-store" });
-    if (response.status === 401) { setNeedsLogin(true); return; }
-    setData(await response.json());
-    setNeedsLogin(false);
+    setLoadError(undefined);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 12_000);
+    try {
+      const response = await fetch("/api/admin/data", { cache: "no-store", signal: controller.signal });
+      if (response.status === 401) {
+        setData(null);
+        setNeedsLogin(true);
+        return;
+      }
+      if (!response.ok) throw new Error(`admin_data_${response.status}`);
+      setData(await response.json());
+      setNeedsLogin(false);
+    } catch (error) {
+      console.error("Admin data load failed", error);
+      setLoadError("Не удалось загрузить данные штаба. Проверьте сервис и повторите.");
+    } finally {
+      window.clearTimeout(timeout);
+    }
   }
 
   useEffect(() => { void load(); }, []);
@@ -100,6 +116,10 @@ export function AdminDashboard() {
 
   if (needsLogin) {
     return <main className="shell"><div className="card admin-login"><div className="brand"><span className="brand-mark">A</span> AGIT / штаб</div><h2>Вход в штаб</h2><form className="form-grid" onSubmit={login}><label className="label">Пароль<input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus /></label><button className="btn btn-primary btn-large">Войти</button></form>{notice && <div className="notice notice-danger" style={{ marginTop: 10 }}>{notice}</div>}</div></main>;
+  }
+
+  if (!data && loadError) {
+    return <main className="shell"><div className="card admin-login"><div className="brand"><span className="brand-mark">A</span> AGIT / штаб</div><h2>Штаб временно недоступен</h2><p className="muted">{loadError}</p><button className="btn btn-primary btn-large" onClick={() => void load()}>Повторить</button></div></main>;
   }
 
   if (!data) return <main className="shell"><div className="loading-card">Загрузка штаба…</div></main>;
