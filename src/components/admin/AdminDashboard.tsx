@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { ArrowDownAZ, ArrowDownUp, ArrowRightLeft, Camera, ClipboardList, History, HousePlus, LocateFixed, LogOut, Map as MapIcon, MapPinned, Menu, Route as RouteIcon, RotateCcw, Settings2, Trash2, Users } from "lucide-react";
+import { ArrowDownAZ, ArrowDownUp, ArrowRightLeft, Camera, ClipboardList, History, HousePlus, LocateFixed, LogOut, Map as MapIcon, MapPinOff, MapPinned, Menu, Route as RouteIcon, RotateCcw, Settings2, Trash2, Undo2, Unlink, Users } from "lucide-react";
 import { AdminMapClient } from "@/components/admin/AdminMapClient";
 import type { MapCandidate, MapCorner } from "@/components/admin/AdminMap";
 import { Badge } from "@/components/ui/badge";
@@ -161,6 +161,8 @@ export function AdminDashboard() {
   }
   function toggleSelected(id: string) { setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]); }
   function toggleCandidate(id: string) { setExcludedCandidateIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]); }
+  function removeAreaCorner(index: number) { setAreaCorners((current) => current.filter((_, itemIndex) => itemIndex !== index)); setCandidates([]); setExcludedCandidateIds([]); setSelectedIds([]); }
+  function clearManualPoint() { setCoords(null); setFocusPoint(null); }
   function resetTerritory() { setAreaCorners([]); setCandidates([]); setExcludedCandidateIds([]); setSelectedIds([]); setTerritoryAgitator(""); }
 
   async function assignHouses(houseIds: string[], agitatorId: string, buildRoute = false) {
@@ -216,6 +218,21 @@ export function AdminDashboard() {
       const response = await fetch("/api/admin/assignments", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ houseIds }) });
       const result = await response.json().catch(() => ({}));
       show(response.ok ? `Снято назначений: ${result.changed || 0}${result.locked ? `. Защищено историей: ${result.locked}` : ""}` : "Не удалось снять назначения", !response.ok);
+      if (response.ok) { setSelectedIds([]); await load(true); }
+      return response.ok;
+    } finally { setRouteBusy(false); }
+  }
+
+  async function deleteHouses(houseIds: string[], confirmText?: string) {
+    if (!houseIds.length || routeBusy) return false;
+    const addresses = (data?.houses || []).filter((house) => houseIds.includes(house.id)).map((house) => house.address);
+    const message = confirmText || (houseIds.length === 1 ? `Удалить точку «${addresses[0] || "дом"}» с карты?` : `Удалить ${houseIds.length} выбранных точек с карты?`);
+    if (!window.confirm(`${message}\n\nТочки с отчётами и историей система не удалит.`)) return false;
+    setRouteBusy(true);
+    try {
+      const response = await fetch("/api/admin/houses", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ houseIds }) });
+      const result = await response.json().catch(() => ({}));
+      show(response.ok ? `Удалено точек: ${result.deleted || 0}${result.locked ? `. Защищено историей: ${result.locked}` : ""}` : "Не удалось удалить точки", !response.ok || !result.deleted);
       if (response.ok) { setSelectedIds([]); await load(true); }
       return response.ok;
     } finally { setRouteBusy(false); }
@@ -297,10 +314,11 @@ export function AdminDashboard() {
           <li className={territoryAgitator ? "done" : ""}><b>2</b><span>Выберите агитатора<select className="input" value={territoryAgitator} onChange={(event) => setTerritoryAgitator(event.target.value)}><option value="">Кому назначить</option>{activeAgitators.map((agitator) => <option key={agitator.id} value={agitator.id}>{agitator.name}</option>)}</select></span></li>
           <li className={includedCandidates.length + selectedIds.length > 0 ? "done" : ""}><b>3</b><span>Подтвердите<small>{includedCandidates.length} новых + {selectedIds.length} существующих домов</small></span></li>
         </ol>
-        {candidates.length > 0 && <div className="candidate-hint"><strong>Проверьте оранжевые точки</strong><span>Нажмите лишнюю точку на карте — она станет серой и не попадёт в маршрут.</span></div>}
+        {candidates.length > 0 && <div className="candidate-hint"><strong>Проверьте оранжевые точки</strong><span>Откройте лишнюю точку и нажмите «Исключить» — она не попадёт в маршрут.</span></div>}
         <Button size="lg" className="full-width" disabled={busy || !territoryAgitator || (!includedCandidates.length && !selectedIds.length)} onClick={finalizeTerritory}><MapPinned size={18} />{busy ? "Подготавливаем…" : "Назначить и построить маршрут"}</Button>
         <div className="territory-secondary-actions">
           {areaCorners.length === 2 && <Button variant="outline" disabled={busy} onClick={() => void discover(areaCorners)}><RotateCcw size={16} />{busy ? "Ищем…" : "Обновить дома"}</Button>}
+          {areaCorners.length > 0 && <Button variant="outline" onClick={() => removeAreaCorner(areaCorners.length - 1)}><Undo2 size={16} />Отменить точку</Button>}
           <Button variant="ghost" onClick={resetTerritory}>Сбросить</Button>
         </div>
       </> : <>
@@ -345,7 +363,7 @@ export function AdminDashboard() {
       {!selectedAgitator ? <div className="workspace-card route-empty"><RouteIcon size={28} /><h2>Выберите агитатора</h2><p>Откроется карта маршрута, порядок домов, перенос и безопасная очистка.</p></div> : <div className="route-manager-layout">
         <div className="workspace-card route-map-card">
           <div className="section-heading"><div><span className="eyebrow">МАРШРУТ НА КАРТЕ</span><h2>{selectedAgitator.name}</h2></div><Badge variant={route.length ? "default" : "secondary"}>{route.length} в маршруте</Badge></div>
-          {route.length ? <div className="admin-route-preview route-manager-map"><AdminMapClient points={route} selectedIds={[]} pickEnabled={false} onPick={() => undefined} onToggle={() => undefined} route={route} /></div> : <div className="route-map-empty"><RouteIcon size={26} /><strong>Активный маршрут пуст</strong><span>Назначьте дома ниже или на вкладке «Карта».</span></div>}
+          {route.length ? <div className="admin-route-preview route-manager-map"><AdminMapClient points={route} selectedIds={[]} pickEnabled={false} onPick={() => undefined} onToggle={() => undefined} onDeletePoint={(id) => void deleteHouses([id])} route={route} /></div> : <div className="route-map-empty"><RouteIcon size={26} /><strong>Активный маршрут пуст</strong><span>Назначьте дома ниже или на вкладке «Карта».</span></div>}
         </div>
 
         <aside className="workspace-card route-settings-card">
@@ -369,14 +387,14 @@ export function AdminDashboard() {
 
       <div className="workspace-card house-manager-card">
         <div className="section-heading"><div><span className="eyebrow">ТОЧЕЧНОЕ УПРАВЛЕНИЕ</span><h2>Все дома</h2></div><input className="input compact-input" value={taskQuery} onChange={(event) => setTaskQuery(event.target.value)} placeholder="Найти адрес" /></div>
-        <div className="bulk-bar route-bulk-bar"><span>Выбрано: <b>{selectedIds.length}</b></span><select className="input" value={bulkAgitator} onChange={(event) => setBulkAgitator(event.target.value)}><option value="">Кому назначить</option>{activeAgitators.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><Button disabled={!selectedIds.length || !bulkAgitator} onClick={() => void assignHouses(selectedIds, bulkAgitator, true)}><RouteIcon size={17} />Назначить</Button><Button variant="destructive" disabled={!selectedIds.length || routeBusy} onClick={() => void removeAssignments(selectedIds, `Снять назначения с ${selectedIds.length} выбранных домов? Задания с историей останутся.`)}><Trash2 size={17} />Снять</Button><Button variant="ghost" disabled={!filteredTasks.length} onClick={() => setSelectedIds(filteredTasks.map((house) => house.id))}>Выбрать найденные</Button><Button variant="ghost" disabled={!selectedIds.length} onClick={() => setSelectedIds([])}>Сбросить</Button></div>
+        <div className="bulk-bar route-bulk-bar"><span>Выбрано: <b>{selectedIds.length}</b></span><select className="input" value={bulkAgitator} onChange={(event) => setBulkAgitator(event.target.value)}><option value="">Кому назначить</option>{activeAgitators.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><Button disabled={!selectedIds.length || !bulkAgitator} onClick={() => void assignHouses(selectedIds, bulkAgitator, true)}><RouteIcon size={17} />Назначить</Button><Button variant="outline" disabled={!selectedIds.length || routeBusy} onClick={() => void removeAssignments(selectedIds, `Снять назначения с ${selectedIds.length} выбранных домов? Задания с историей останутся.`)}><Unlink size={17} />Снять</Button><Button variant="destructive" disabled={!selectedIds.length || routeBusy} onClick={() => void deleteHouses(selectedIds, `Удалить ${selectedIds.length} выбранных точек домов с карты?`)}><MapPinOff size={17} />Удалить точки</Button><Button variant="ghost" disabled={!filteredTasks.length} onClick={() => setSelectedIds(filteredTasks.map((house) => house.id))}>Выбрать найденные</Button><Button variant="ghost" disabled={!selectedIds.length} onClick={() => setSelectedIds([])}>Сбросить</Button></div>
         <div className="assignment-list">{filteredTasks.map((house) => {
           const assignment = assignmentByHouse.get(house.id);
           const locked = Boolean(assignment && assignment.status !== "TODO");
           return <div className={`assignment-row ${selectedIds.includes(house.id) ? "selected" : ""}`} key={house.id}>
             <input type="checkbox" checked={selectedIds.includes(house.id)} onChange={() => toggleSelected(house.id)} aria-label={`Выбрать ${house.address}`} />
             <div className="assignment-copy"><strong>{house.address}</strong><small>{assignment ? `${assignment.agitatorName} · ${statusText[assignment.status] || assignment.status}${assignment.routeOrder ? ` · №${assignment.routeOrder}` : ""}` : "Не назначено"}</small></div>
-            <div className="assignment-actions"><select className="input assignment-select" value={assignment?.agitatorId || ""} disabled={locked} onChange={(event) => void assignOne(house.id, event.target.value)}><option value="">Без назначения</option>{activeAgitators.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>{assignment?.status === "TODO" && <Button variant="ghost" size="icon" className="assignment-remove" disabled={routeBusy} onClick={() => void removeAssignments([house.id], `Снять назначение с дома «${house.address}»?`)} aria-label={`Снять назначение с ${house.address}`}><Trash2 size={17} /></Button>}</div>
+            <div className="assignment-actions"><select className="input assignment-select" value={assignment?.agitatorId || ""} disabled={locked} onChange={(event) => void assignOne(house.id, event.target.value)}><option value="">Без назначения</option>{activeAgitators.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>{assignment?.status === "TODO" && <Button variant="ghost" size="icon" className="assignment-remove" disabled={routeBusy} onClick={() => void removeAssignments([house.id], `Снять назначение с дома «${house.address}»?`)} aria-label={`Снять назначение с ${house.address}`} title="Снять с маршрута"><Unlink size={17} /></Button>}<Button variant="ghost" size="icon" className="point-delete" disabled={routeBusy || Boolean(assignment && assignment.status !== "TODO")} onClick={() => void deleteHouses([house.id])} aria-label={`Удалить точку ${house.address}`} title={assignment && assignment.status !== "TODO" ? "Нельзя удалить: есть история работы" : "Удалить точку с карты"}><MapPinOff size={17} /></Button></div>
           </div>;
         })}</div>
       </div>
@@ -409,7 +427,7 @@ export function AdminDashboard() {
           <div><span className="eyebrow">РАБОЧАЯ КАРТА</span><strong>{pickMode === "area" ? (areaCorners.length === 2 ? "Территория найдена — проверьте дома" : "Нажмите два противоположных угла квартала") : "Нажмите точку нового дома"}</strong></div>
           <div className="map-toolbar-actions"><Badge variant="outline">{data.houses.length} домов</Badge><Button className="mobile-panel-button" size="sm" onClick={() => setMobilePanelOpen(true)}><Menu size={16} />Действия</Button></div>
         </div>
-        <div className="admin-map-wrap"><AdminMapClient points={mapPoints} candidates={candidates} excludedCandidateIds={excludedCandidateIds} selectedIds={selectedIds} selectedPoint={coords} areaCorners={areaCorners} pickEnabled={!busy} onPick={mapPick} onToggle={toggleSelected} onToggleCandidate={toggleCandidate} focusPoint={focusPoint} route={route} /></div>
+        <div className="admin-map-wrap"><AdminMapClient points={mapPoints} candidates={candidates} excludedCandidateIds={excludedCandidateIds} selectedIds={selectedIds} selectedPoint={coords} areaCorners={areaCorners} pickEnabled={!busy} onPick={mapPick} onToggle={toggleSelected} onToggleCandidate={toggleCandidate} onDeletePoint={(id) => void deleteHouses([id])} onRemoveCorner={removeAreaCorner} onClearSelectedPoint={clearManualPoint} focusPoint={focusPoint} route={route} /></div>
         <div className="map-bottom-status"><span><i className="legend-dot legend-new" />Новые из OSM</span><span><i className="legend-dot legend-selected" />Выбраны</span><span><i className="legend-dot legend-done" />Приняты</span></div>
       </div>
       <aside className="admin-side-card desktop-territory-panel">{renderTerritoryControls()}</aside>

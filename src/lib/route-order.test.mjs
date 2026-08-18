@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildManagedRouteOrder, buildRouteOrder } from "./route-order.ts";
 import { isLikelyResidentialAddress, normalizeBounds } from "./osm.ts";
+import { canDeleteHousePoint } from "./house-safety.ts";
 
 test("route order visits every point once and follows nearby stops", () => {
   const order = buildRouteOrder([
@@ -21,6 +22,14 @@ test("route management can sort addresses naturally and reverse the current orde
   ];
   assert.deepEqual(buildManagedRouteOrder(points, "address"), ["two", "twelve", "twenty"]);
   assert.deepEqual(buildManagedRouteOrder(points, "reverse"), ["twenty", "twelve", "two"]);
+});
+
+test("map point deletion keeps every house that has work history", () => {
+  assert.equal(canDeleteHousePoint([]), true);
+  assert.equal(canDeleteHousePoint([{ status: "TODO", reportCount: 0 }]), true);
+  assert.equal(canDeleteHousePoint([{ status: "ACTIVE", reportCount: 1 }]), false);
+  assert.equal(canDeleteHousePoint([{ status: "TODO", reportCount: 1 }]), false);
+  assert.equal(canDeleteHousePoint([{ status: "ACCEPTED", reportCount: 1 }]), false);
 });
 
 test("map bounds accept a neighbourhood and reject a huge selection", () => {

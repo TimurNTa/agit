@@ -16,6 +16,9 @@ export function AdminMapClient(props: {
   onPick: (lat: number, lon: number) => void;
   onToggle?: (id: string) => void;
   onToggleCandidate?: (id: string) => void;
+  onDeletePoint?: (id: string) => void;
+  onRemoveCorner?: (index: number) => void;
+  onClearSelectedPoint?: () => void;
   focusPoint?: MapCorner | null;
   route?: AdminPoint[];
 }) { return <AdminMap {...props} />; }

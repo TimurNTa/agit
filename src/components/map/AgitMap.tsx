@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect } from "react";
-import { CircleMarker, MapContainer, Polyline, Popup, TileLayer, Tooltip, useMap } from "react-leaflet";
+import { AttributionControl, CircleMarker, MapContainer, Polyline, Popup, TileLayer, Tooltip, useMap } from "react-leaflet";
 import type { MapTask } from "@/components/map/types";
+import { lightBasemap } from "@/components/map/basemap";
 
 const colors: Record<MapTask["status"], string> = {
   TODO: "#8c96a3",
@@ -36,11 +37,9 @@ export function AgitMap({ tasks, selectedId, onSelect, userLocation }: {
   const center: [number, number] = tasks.length ? [tasks[0].lat, tasks[0].lon] : [57.591, 34.563];
   const route = tasks.filter((task) => task.status !== "ACCEPTED" && task.status !== "SUBMITTED");
   return (
-    <MapContainer center={center} zoom={15} scrollWheelZoom zoomControl>
-      <TileLayer
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-      />
+    <MapContainer center={center} zoom={15} scrollWheelZoom zoomControl attributionControl={false}>
+      <AttributionControl position="bottomright" prefix={false} />
+      <TileLayer {...lightBasemap} />
       <Viewport tasks={tasks} selectedId={selectedId} userLocation={userLocation} />
       {route.length > 1 && <Polyline positions={route.map((task) => [task.lat, task.lon])} pathOptions={{ color: "#ff7a00", weight: 4, opacity: .78 }} />}
       {userLocation && (
@@ -58,8 +57,8 @@ export function AgitMap({ tasks, selectedId, onSelect, userLocation }: {
         >
           {task.routeOrder && task.status !== "ACCEPTED" && <Tooltip permanent direction="top" className="route-tooltip">{task.routeOrder}</Tooltip>}
           <Popup>
-            <strong>{task.address}</strong><br />
-            {task.note || "Задание"}
+            <strong>{task.address}</strong>
+            <span className="map-popup-note">{task.note || "Задание"}</span>
           </Popup>
         </CircleMarker>
       ))}
