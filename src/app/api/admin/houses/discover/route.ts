@@ -10,8 +10,8 @@ export async function POST(request: Request) {
   const bounds = normalizeBounds(body?.bounds);
   if (!bounds) return NextResponse.json({ error: "invalid_or_large_area" }, { status: 400 });
   try {
-    const houses = await discoverOsmHouses(bounds);
-    return NextResponse.json({ houses, count: houses.length });
+    const discovery = await discoverOsmHouses(bounds);
+    return NextResponse.json({ ...discovery, count: discovery.houses.length });
   } catch (error) {
     console.error("OSM house discovery failed", error);
     return NextResponse.json({ error: "map_data_unavailable" }, { status: 503 });

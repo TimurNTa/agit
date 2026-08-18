@@ -20,20 +20,23 @@ function Focus({ point }: { point?: MapCorner | null }) {
   return null;
 }
 
-export function AdminMap({ points, candidates = [], selectedIds = [], selectedPoint, areaCorners = [], pickEnabled = true, onPick, onToggle, focusPoint, route = [] }: {
+export function AdminMap({ points, candidates = [], excludedCandidateIds = [], selectedIds = [], selectedPoint, areaCorners = [], pickEnabled = true, onPick, onToggle, onToggleCandidate, focusPoint, route = [] }: {
   points: AdminPoint[];
   candidates?: MapCandidate[];
+  excludedCandidateIds?: string[];
   selectedIds?: string[];
   selectedPoint?: MapCorner | null;
   areaCorners?: MapCorner[];
   pickEnabled?: boolean;
   onPick: (lat: number, lon: number) => void;
   onToggle?: (id: string) => void;
+  onToggleCandidate?: (id: string) => void;
   focusPoint?: MapCorner | null;
   route?: AdminPoint[];
 }) {
   const center: [number, number] = points.length ? [points[0].lat, points[0].lon] : [57.591, 34.563];
   const selected = new Set(selectedIds);
+  const excludedCandidates = new Set(excludedCandidateIds);
   const bounds = areaCorners.length === 2 ? [[Math.min(areaCorners[0].lat, areaCorners[1].lat), Math.min(areaCorners[0].lon, areaCorners[1].lon)], [Math.max(areaCorners[0].lat, areaCorners[1].lat), Math.max(areaCorners[0].lon, areaCorners[1].lon)]] as [[number, number], [number, number]] : null;
   return <MapContainer center={center} zoom={15} scrollWheelZoom>
     <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
@@ -43,7 +46,10 @@ export function AdminMap({ points, candidates = [], selectedIds = [], selectedPo
     {route.length > 1 && <Polyline positions={route.map((point) => [point.lat, point.lon])} pathOptions={{ color: "#ff7a00", weight: 4, opacity: .8 }} />}
     {areaCorners.map((corner, index) => <CircleMarker key={`corner-${index}`} center={[corner.lat, corner.lon]} radius={8} pathOptions={{ color: "#fff", fillColor: "#ff7a00", fillOpacity: 1, weight: 3 }}><Tooltip permanent direction="top">{index + 1}</Tooltip></CircleMarker>)}
     {selectedPoint && <CircleMarker center={[selectedPoint.lat, selectedPoint.lon]} radius={10} pathOptions={{ color: "#fff", fillColor: "#ff7a00", fillOpacity: 1, weight: 4 }}><Popup><strong>Новая точка</strong></Popup></CircleMarker>}
-    {candidates.map((candidate) => <CircleMarker key={candidate.externalId} center={[candidate.lat, candidate.lon]} radius={6} pathOptions={{ color: "#fff", fillColor: "#3478f6", fillOpacity: .88, weight: 2 }} bubblingMouseEvents={false}><Popup><strong>{candidate.address}</strong><br />Будет добавлен из OpenStreetMap</Popup></CircleMarker>)}
+    {candidates.map((candidate) => {
+      const excluded = excludedCandidates.has(candidate.externalId);
+      return <CircleMarker key={candidate.externalId} center={[candidate.lat, candidate.lon]} radius={excluded ? 5 : 7} pathOptions={{ color: excluded ? "#7b8490" : "#fff", fillColor: excluded ? "#7b8490" : "#3478f6", fillOpacity: excluded ? .35 : .9, weight: 2 }} bubblingMouseEvents={false} eventHandlers={{ click: () => onToggleCandidate?.(candidate.externalId) }}><Popup><strong>{candidate.address}</strong><br />{excluded ? "Исключён. Нажмите ещё раз, чтобы вернуть." : "Будет добавлен. Нажмите, чтобы исключить."}</Popup></CircleMarker>;
+    })}
     {points.map((point) => {
       const isSelected = selected.has(point.id);
       const color = statusColors[point.status || ""] || "#ff7a00";

@@ -230,6 +230,7 @@ h1, h2, h3, p { margin-top: 0; }
 .simple-steps li.done > b { background: var(--ok); color: #07180e; }
 .simple-steps li span { display: grid; gap: 6px; font-weight: 800; }
 .simple-steps small { color: var(--muted); font-weight: 500; }
+.candidate-hint { display: block; color: var(--muted); line-height: 1.45; padding: 9px 10px; border: 1px solid var(--border); border-radius: 11px; background: var(--panel-2); }
 .search-form { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 6px; }
 .search-results { display: grid; max-height: 230px; overflow: auto; border: 1px solid var(--border); border-radius: 12px; }
 .search-results button { border: 0; border-bottom: 1px solid var(--border); background: var(--panel-2); color: var(--text); text-align: left; padding: 9px; }

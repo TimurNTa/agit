@@ -61,6 +61,7 @@ APP_URL=https://$DOMAIN
 DATABASE_URL=
 PHOTO_STORAGE_ROOT=$PHOTO_DIR
 MAX_REPORT_DISTANCE_METERS=150
+OVERPASS_URLS=https://overpass-api.de/api/interpreter,https://overpass.private.coffee/api/interpreter,https://maps.mail.ru/osm/tools/overpass/api/interpreter
 OVERPASS_URL=https://overpass-api.de/api/interpreter
 NOMINATIM_URL=https://nominatim.openstreetmap.org
 VK_API_VERSION=5.199
