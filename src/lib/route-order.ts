@@ -1,4 +1,6 @@
 type Point = { id: string; lat: number; lon: number };
+type ManagedPoint = Point & { address: string; routeOrder?: number | null };
+export type ManagedRouteStrategy = "nearest" | "address" | "reverse";
 
 function squaredDistance(a: Pick<Point, "lat" | "lon">, b: Pick<Point, "lat" | "lon">) {
   const latScale = 111_000;
@@ -24,4 +26,19 @@ export function buildRouteOrder(points: Point[], start?: { lat: number; lon: num
     current = next;
   }
   return ordered;
+}
+
+export function buildManagedRouteOrder(points: ManagedPoint[], strategy: ManagedRouteStrategy, start?: { lat: number; lon: number }) {
+  if (strategy === "reverse") {
+    return [...points]
+      .sort((a, b) => (a.routeOrder ?? Number.MAX_SAFE_INTEGER) - (b.routeOrder ?? Number.MAX_SAFE_INTEGER))
+      .reverse()
+      .map((point) => point.id);
+  }
+  if (strategy === "address") {
+    return [...points]
+      .sort((a, b) => a.address.localeCompare(b.address, "ru", { numeric: true, sensitivity: "base" }))
+      .map((point) => point.id);
+  }
+  return buildRouteOrder(points, start);
 }

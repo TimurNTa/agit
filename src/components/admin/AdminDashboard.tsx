@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { Camera, ClipboardList, History, HousePlus, LogOut, Map as MapIcon, MapPinned, Menu, RotateCcw, Users } from "lucide-react";
+import { ArrowDownAZ, ArrowDownUp, ArrowRightLeft, Camera, ClipboardList, History, HousePlus, LocateFixed, LogOut, Map as MapIcon, MapPinned, Menu, Route as RouteIcon, RotateCcw, Settings2, Trash2, Users } from "lucide-react";
 import { AdminMapClient } from "@/components/admin/AdminMapClient";
 import type { MapCandidate, MapCorner } from "@/components/admin/AdminMap";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +23,7 @@ type Data = {
   notificationRecipients: Array<{ id: string; name: string; vkId: string; active: boolean }>;
 };
 type SearchResult = { label: string; address: string; lat: number; lon: number; type: string };
+type RouteStrategy = "nearest" | "address";
 
 const statusText: Record<string, string> = { TODO: "Не начато", ACTIVE: "В работе", SUBMITTED: "На проверке", ACCEPTED: "Принято", REJECTED: "Переделать" };
 const validTabs = new Set<Tab>(["overview", "territory", "tasks", "team", "reports", "history"]);
@@ -44,6 +45,9 @@ export function AdminDashboard() {
   const [manualAddress, setManualAddress] = useState("");
   const [territoryAgitator, setTerritoryAgitator] = useState("");
   const [routeAgitator, setRouteAgitator] = useState("");
+  const [routeStrategy, setRouteStrategy] = useState<RouteStrategy>("nearest");
+  const [routeTarget, setRouteTarget] = useState("");
+  const [routeBusy, setRouteBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [search, setSearch] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
@@ -89,7 +93,8 @@ export function AdminDashboard() {
 
   const assignmentByHouse = useMemo(() => new Map((data?.assignments || []).map((item) => [item.houseId, item])), [data]);
   const mapPoints = useMemo(() => (data?.houses || []).map((house) => { const assignment = assignmentByHouse.get(house.id); return { ...house, status: assignment?.status, routeOrder: assignment?.routeOrder, agitatorName: assignment?.agitatorName }; }), [data, assignmentByHouse]);
-  const route = useMemo(() => (data?.assignments || []).filter((item) => item.agitatorId === routeAgitator && !["SUBMITTED", "ACCEPTED"].includes(item.status)).sort((a, b) => (a.routeOrder ?? 999999) - (b.routeOrder ?? 999999)).map((item) => ({ id: item.houseId, address: item.address, lat: item.lat, lon: item.lon, status: item.status, routeOrder: item.routeOrder, agitatorName: item.agitatorName })), [data, routeAgitator]);
+  const routeAssignments = useMemo(() => (data?.assignments || []).filter((item) => item.agitatorId === routeAgitator && !["SUBMITTED", "ACCEPTED"].includes(item.status)).sort((a, b) => (a.routeOrder ?? 999999) - (b.routeOrder ?? 999999)), [data, routeAgitator]);
+  const route = useMemo(() => routeAssignments.map((item) => ({ id: item.houseId, address: item.address, lat: item.lat, lon: item.lon, status: item.status, routeOrder: item.routeOrder, agitatorName: item.agitatorName })), [routeAssignments]);
   const pendingReports = data?.reports.filter((report) => report.status === "SUBMITTED").length || 0;
   const accepted = data?.assignments.filter((item) => item.status === "ACCEPTED").length || 0;
   const activeAgitators = data?.agitators.filter((item) => item.active) || [];
@@ -182,7 +187,85 @@ export function AdminDashboard() {
     if (ok) { resetTerritory(); setMobilePanelOpen(false); }
     setBusy(false);
   }
-  async function optimizeRoute(agitatorId: string) { if (!agitatorId) return; const response = await fetch("/api/admin/routes/optimize", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ agitatorId }) }); const result = await response.json().catch(() => ({})); show(response.ok ? `Маршрут обновлён: ${result.changed || 0} домов` : "Не удалось построить маршрут", !response.ok); setRouteAgitator(agitatorId); if (response.ok) await load(true); }
+  async function optimizeRoute(agitatorId: string, strategy: RouteStrategy | "reverse" = routeStrategy, fromCurrentLocation = false) {
+    if (!agitatorId || routeBusy) return;
+    setRouteBusy(true);
+    try {
+      let start: { startLat?: number; startLon?: number } = {};
+      if (fromCurrentLocation) {
+        if (!navigator.geolocation) throw new Error("geolocation_unavailable");
+        const position = await new Promise<GeolocationPosition>((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 12_000, maximumAge: 30_000 }));
+        start = { startLat: position.coords.latitude, startLon: position.coords.longitude };
+      }
+      const response = await fetch("/api/admin/routes/optimize", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ agitatorId, strategy, ...start }) });
+      const result = await response.json().catch(() => ({}));
+      const action = strategy === "reverse" ? "развёрнут" : strategy === "address" ? "отсортирован по адресам" : fromCurrentLocation ? "построен от вашего места" : "оптимизирован";
+      show(response.ok ? `Маршрут ${action}: ${result.changed || 0} домов` : "Не удалось изменить маршрут", !response.ok);
+      setRouteAgitator(agitatorId);
+      if (response.ok) await load(true);
+    } catch {
+      show(fromCurrentLocation ? "Не удалось определить ваше местоположение. Разрешите геолокацию и повторите." : "Не удалось изменить маршрут", true);
+    } finally { setRouteBusy(false); }
+  }
+
+  async function removeAssignments(houseIds: string[], confirmText?: string) {
+    if (!houseIds.length || routeBusy) return false;
+    if (confirmText && !window.confirm(confirmText)) return false;
+    setRouteBusy(true);
+    try {
+      const response = await fetch("/api/admin/assignments", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ houseIds }) });
+      const result = await response.json().catch(() => ({}));
+      show(response.ok ? `Снято назначений: ${result.changed || 0}${result.locked ? `. Защищено историей: ${result.locked}` : ""}` : "Не удалось снять назначения", !response.ok);
+      if (response.ok) { setSelectedIds([]); await load(true); }
+      return response.ok;
+    } finally { setRouteBusy(false); }
+  }
+
+  async function clearRoute(agitatorId: string) {
+    if (!data || !agitatorId || routeBusy) return;
+    const agitator = data.agitators.find((item) => item.id === agitatorId);
+    const stat = data.stats.find((item) => item.agitatorId === agitatorId);
+    const removable = stat?.todo || 0;
+    const protectedCount = Math.max(0, (stat?.total || 0) - removable);
+    if (!removable) { show("В этом маршруте нет назначений, которые можно безопасно снять", true); return; }
+    if (!window.confirm(`Снять ${removable} не начатых домов у ${agitator?.name || "агитатора"}?${protectedCount ? ` Ещё ${protectedCount} заданий с историей останутся.` : ""}`)) return;
+    setRouteBusy(true);
+    try {
+      const response = await fetch("/api/admin/assignments", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ agitatorId }) });
+      const result = await response.json().catch(() => ({}));
+      show(response.ok ? `Маршрут очищен: снято ${result.changed || 0}${result.locked ? `, сохранено с историей ${result.locked}` : ""}` : "Не удалось очистить маршрут", !response.ok);
+      if (response.ok) await load(true);
+    } finally { setRouteBusy(false); }
+  }
+
+  async function clearAllRoutes() {
+    if (!data || routeBusy) return;
+    const removable = data.stats.reduce((sum, stat) => sum + stat.todo, 0);
+    const protectedCount = Math.max(0, data.assignments.length - removable);
+    if (!removable) { show("Нет не начатых назначений для очистки", true); return; }
+    if (!window.confirm(`Снять все ${removable} не начатых назначений у всей команды?${protectedCount ? ` ${protectedCount} заданий с историей останутся.` : ""}`)) return;
+    setRouteBusy(true);
+    try {
+      const response = await fetch("/api/admin/assignments", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ all: true }) });
+      const result = await response.json().catch(() => ({}));
+      show(response.ok ? `Свободные маршруты очищены: снято ${result.changed || 0}${result.locked ? `, сохранено с историей ${result.locked}` : ""}` : "Не удалось очистить маршруты", !response.ok);
+      if (response.ok) await load(true);
+    } finally { setRouteBusy(false); }
+  }
+
+  async function transferRoute() {
+    if (!data || !routeAgitator || !routeTarget || routeAgitator === routeTarget || routeBusy) return;
+    const source = data.agitators.find((item) => item.id === routeAgitator)?.name || "агитатора";
+    const target = data.agitators.find((item) => item.id === routeTarget)?.name || "другому агитатору";
+    const editableHouseIds = routeAssignments.filter((item) => item.status === "TODO").map((item) => item.houseId);
+    if (!editableHouseIds.length) { show("В маршруте нет не начатых домов для переноса", true); return; }
+    if (!window.confirm(`Перенести ${editableHouseIds.length} не начатых домов от ${source} к ${target}?`)) return;
+    setRouteBusy(true);
+    try {
+      const ok = await assignHouses(editableHouseIds, routeTarget, true);
+      if (ok) { setRouteAgitator(routeTarget); setRouteTarget(""); }
+    } finally { setRouteBusy(false); }
+  }
 
   async function searchAddress(event: FormEvent) { event.preventDefault(); if (search.trim().length < 3) return; setSearching(true); const response = await fetch(`/api/admin/geocode?q=${encodeURIComponent(search)}`); const result = await response.json().catch(() => ({})); setSearchResults(response.ok ? result.results || [] : []); if (!response.ok) show("Поиск адреса временно недоступен", true); setSearching(false); }
   function chooseSearch(result: SearchResult) { setManualAddress(result.address); setCoords({ lat: result.lat, lon: result.lon }); setFocusPoint({ lat: result.lat, lon: result.lon }); setSearchResults([]); setPickMode("house"); }
@@ -235,9 +318,74 @@ export function AdminDashboard() {
     </div>;
   }
 
+  function renderRoutesPage() {
+    if (!data) return null;
+    const selectedAgitator = data.agitators.find((item) => item.id === routeAgitator);
+    const selectedStat = data.stats.find((item) => item.agitatorId === routeAgitator);
+    const editableRouteCount = routeAssignments.filter((item) => item.status === "TODO").length;
+    const routePeople = data.agitators.filter((agitator) => agitator.active || (data.stats.find((item) => item.agitatorId === agitator.id)?.total || 0) > 0);
+    return <section className="routes-page">
+      <div className="workspace-card route-roster-card">
+        <div className="section-heading"><div><span className="eyebrow">МАРШРУТЫ КОМАНДЫ</span><h2>Управление в один экран</h2></div><div className="route-roster-actions"><Badge variant="outline">{data.assignments.length} назначений</Badge><Button variant="destructive" size="sm" disabled={routeBusy || !data.stats.some((stat) => stat.todo > 0)} onClick={() => void clearAllRoutes()}><Trash2 size={15} />Очистить свободные</Button></div></div>
+        <div className="route-roster">
+          {routePeople.map((agitator) => {
+            const stat = data.stats.find((item) => item.agitatorId === agitator.id);
+            return <div className={`route-person-card ${routeAgitator === agitator.id ? "active" : ""}`} key={agitator.id}>
+              <button className="route-person-main" type="button" onClick={() => { setRouteAgitator(agitator.id); setRouteTarget(""); }}>
+                <span className="avatar-circle">{agitator.name.charAt(0).toUpperCase()}</span>
+                <span className="route-person-copy"><strong>{agitator.name}</strong><small>{stat?.todo || 0} не начато · {stat?.active || 0} в работе</small></span>
+                <span className="route-person-total"><strong>{stat?.total || 0}</strong><small>домов</small></span>
+              </button>
+              <Button variant="ghost" size="icon" className="route-quick-clear" disabled={routeBusy || !(stat?.todo || 0)} onClick={() => void clearRoute(agitator.id)} aria-label={`Очистить маршрут ${agitator.name}`} title="Снять все не начатые дома"><Trash2 size={17} /></Button>
+            </div>;
+          })}
+        </div>
+      </div>
+
+      {!selectedAgitator ? <div className="workspace-card route-empty"><RouteIcon size={28} /><h2>Выберите агитатора</h2><p>Откроется карта маршрута, порядок домов, перенос и безопасная очистка.</p></div> : <div className="route-manager-layout">
+        <div className="workspace-card route-map-card">
+          <div className="section-heading"><div><span className="eyebrow">МАРШРУТ НА КАРТЕ</span><h2>{selectedAgitator.name}</h2></div><Badge variant={route.length ? "default" : "secondary"}>{route.length} в маршруте</Badge></div>
+          {route.length ? <div className="admin-route-preview route-manager-map"><AdminMapClient points={route} selectedIds={[]} pickEnabled={false} onPick={() => undefined} onToggle={() => undefined} route={route} /></div> : <div className="route-map-empty"><RouteIcon size={26} /><strong>Активный маршрут пуст</strong><span>Назначьте дома ниже или на вкладке «Карта».</span></div>}
+        </div>
+
+        <aside className="workspace-card route-settings-card">
+          <div className="route-settings-heading"><div><span className="eyebrow">НАСТРОЙКИ</span><h2>Маршрут</h2></div><Settings2 size={20} /></div>
+          <div className="route-stat-grid"><span><b>{selectedStat?.todo || 0}</b><small>не начато</small></span><span><b>{selectedStat?.active || 0}</b><small>в работе</small></span><span><b>{selectedStat?.rejected || 0}</b><small>переделать</small></span><span><b>{selectedStat?.submitted || 0}</b><small>проверка</small></span><span><b>{selectedStat?.accepted || 0}</b><small>принято</small></span></div>
+
+          <div className="route-setting-group">
+            <label className="label">Порядок обхода<select className="input" value={routeStrategy} onChange={(event) => setRouteStrategy(event.target.value as RouteStrategy)}><option value="nearest">Короткий — соседние дома</option><option value="address">По адресу и номеру дома</option></select></label>
+            <Button className="full-width" disabled={routeBusy || !route.length} onClick={() => void optimizeRoute(routeAgitator, routeStrategy)}>{routeStrategy === "address" ? <ArrowDownAZ size={17} /> : <RouteIcon size={17} />}Применить порядок</Button>
+            <div className="route-button-grid"><Button variant="outline" disabled={routeBusy || !route.length} onClick={() => void optimizeRoute(routeAgitator, "nearest", true)}><LocateFixed size={17} />От моего места</Button><Button variant="outline" disabled={routeBusy || !route.length} onClick={() => void optimizeRoute(routeAgitator, "reverse")}><ArrowDownUp size={17} />Развернуть</Button></div>
+          </div>
+
+          <div className="route-setting-group">
+            <label className="label">Перенести не начатые дома<select className="input" value={routeTarget} onChange={(event) => setRouteTarget(event.target.value)}><option value="">Выберите агитатора</option>{activeAgitators.filter((item) => item.id !== routeAgitator).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+            <Button variant="secondary" className="full-width" disabled={routeBusy || !routeTarget || !editableRouteCount} onClick={() => void transferRoute()}><ArrowRightLeft size={17} />Перенести {editableRouteCount || ""} домов</Button>
+          </div>
+
+          <div className="route-danger-zone"><div><strong>Быстрая очистка</strong><span>Снимет только «не начато». Отчёты, фото и история останутся.</span></div><Button variant="destructive" disabled={routeBusy || !editableRouteCount} onClick={() => void clearRoute(routeAgitator)}><Trash2 size={17} />Снять {editableRouteCount || ""}</Button></div>
+        </aside>
+      </div>}
+
+      <div className="workspace-card house-manager-card">
+        <div className="section-heading"><div><span className="eyebrow">ТОЧЕЧНОЕ УПРАВЛЕНИЕ</span><h2>Все дома</h2></div><input className="input compact-input" value={taskQuery} onChange={(event) => setTaskQuery(event.target.value)} placeholder="Найти адрес" /></div>
+        <div className="bulk-bar route-bulk-bar"><span>Выбрано: <b>{selectedIds.length}</b></span><select className="input" value={bulkAgitator} onChange={(event) => setBulkAgitator(event.target.value)}><option value="">Кому назначить</option>{activeAgitators.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><Button disabled={!selectedIds.length || !bulkAgitator} onClick={() => void assignHouses(selectedIds, bulkAgitator, true)}><RouteIcon size={17} />Назначить</Button><Button variant="destructive" disabled={!selectedIds.length || routeBusy} onClick={() => void removeAssignments(selectedIds, `Снять назначения с ${selectedIds.length} выбранных домов? Задания с историей останутся.`)}><Trash2 size={17} />Снять</Button><Button variant="ghost" disabled={!filteredTasks.length} onClick={() => setSelectedIds(filteredTasks.map((house) => house.id))}>Выбрать найденные</Button><Button variant="ghost" disabled={!selectedIds.length} onClick={() => setSelectedIds([])}>Сбросить</Button></div>
+        <div className="assignment-list">{filteredTasks.map((house) => {
+          const assignment = assignmentByHouse.get(house.id);
+          const locked = Boolean(assignment && assignment.status !== "TODO");
+          return <div className={`assignment-row ${selectedIds.includes(house.id) ? "selected" : ""}`} key={house.id}>
+            <input type="checkbox" checked={selectedIds.includes(house.id)} onChange={() => toggleSelected(house.id)} aria-label={`Выбрать ${house.address}`} />
+            <div className="assignment-copy"><strong>{house.address}</strong><small>{assignment ? `${assignment.agitatorName} · ${statusText[assignment.status] || assignment.status}${assignment.routeOrder ? ` · №${assignment.routeOrder}` : ""}` : "Не назначено"}</small></div>
+            <div className="assignment-actions"><select className="input assignment-select" value={assignment?.agitatorId || ""} disabled={locked} onChange={(event) => void assignOne(house.id, event.target.value)}><option value="">Без назначения</option>{activeAgitators.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>{assignment?.status === "TODO" && <Button variant="ghost" size="icon" className="assignment-remove" disabled={routeBusy} onClick={() => void removeAssignments([house.id], `Снять назначение с дома «${house.address}»?`)} aria-label={`Снять назначение с ${house.address}`}><Trash2 size={17} /></Button>}</div>
+          </div>;
+        })}</div>
+      </div>
+    </section>;
+  }
+
   const navItems = [
     { id: "territory" as const, label: "Карта", icon: MapIcon },
-    { id: "tasks" as const, label: "Задания", icon: ClipboardList },
+    { id: "tasks" as const, label: "Маршруты", icon: ClipboardList },
     { id: "team" as const, label: "Команда", icon: Users },
     { id: "reports" as const, label: "Отчёты", icon: Camera },
     { id: "history" as const, label: "История", icon: History },
@@ -269,7 +417,7 @@ export function AdminDashboard() {
       <Sheet open={mobilePanelOpen} onOpenChange={setMobilePanelOpen}><SheetContent side="bottom" className="territory-sheet"><SheetHeader><SheetTitle>Работа с картой</SheetTitle><SheetDescription>Выделите дома и назначьте их агитатору</SheetDescription></SheetHeader>{renderTerritoryControls()}</SheetContent></Sheet>
     </section>}
 
-    {tab === "tasks" && <section className="workspace-card"><div className="section-heading"><div><span className="eyebrow">МАССОВОЕ УПРАВЛЕНИЕ</span><h2>Дома и исполнители</h2></div><input className="input compact-input" value={taskQuery} onChange={(event) => setTaskQuery(event.target.value)} placeholder="Найти адрес" /></div><div className="bulk-bar"><span>Выбрано: {selectedIds.length}</span><select className="input" value={bulkAgitator} onChange={(event) => setBulkAgitator(event.target.value)}><option value="">Кому назначить</option>{activeAgitators.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button className="btn btn-primary" onClick={() => void assignHouses(selectedIds, bulkAgitator, true)}>Назначить и построить маршрут</button><button className="btn btn-ghost" onClick={() => setSelectedIds([])}>Сбросить</button></div><div className="route-bar"><select className="input" value={routeAgitator} onChange={(event) => setRouteAgitator(event.target.value)}><option value="">Показать маршрут агитатора</option>{data.agitators.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button className="btn btn-ghost" disabled={!routeAgitator} onClick={() => optimizeRoute(routeAgitator)}>Перестроить маршрут</button></div>{routeAgitator && <div className="admin-route-preview"><AdminMapClient points={mapPoints} selectedIds={selectedIds} pickEnabled={false} onPick={() => undefined} onToggle={toggleSelected} route={route} /></div>}<div className="assignment-list">{filteredTasks.map((house) => { const assignment = assignmentByHouse.get(house.id); const locked = assignment && ["ACTIVE","SUBMITTED","ACCEPTED"].includes(assignment.status); return <div className={`assignment-row ${selectedIds.includes(house.id) ? "selected" : ""}`} key={house.id}><input type="checkbox" checked={selectedIds.includes(house.id)} onChange={() => toggleSelected(house.id)} aria-label={`Выбрать ${house.address}`} /><div className="assignment-copy"><strong>{house.address}</strong><small>{assignment ? `${statusText[assignment.status] || assignment.status}${assignment.routeOrder ? ` · №${assignment.routeOrder}` : ""}` : "Не назначено"}</small></div><select className="input assignment-select" value={assignment?.agitatorId || ""} disabled={Boolean(locked)} onChange={(event) => void assignOne(house.id, event.target.value)}><option value="">Без назначения</option>{activeAgitators.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>; })}</div></section>}
+    {tab === "tasks" && renderRoutesPage()}
 
     {tab === "team" && <section className="admin-two-column"><div><div className="workspace-card"><span className="eyebrow">КОМАНДА</span><h2>Добавить агитатора</h2><form className="form-grid" onSubmit={addAgitator}><label className="label">Имя<input className="input" name="name" required /></label><label className="label">VK ID<input className="input" name="vkId" inputMode="numeric" required /></label><button className="btn btn-primary">Добавить</button></form></div><div className="workspace-card"><span className="eyebrow">УВЕДОМЛЕНИЯ ШТАБА</span><h2>Получать новые отчёты в VK</h2><form className="form-grid" onSubmit={addRecipient}><label className="label">Имя<input className="input" name="name" required /></label><label className="label">Ваш VK ID<input className="input" name="vkId" inputMode="numeric" required /></label><button className="btn btn-primary">Включить и отправить тест</button></form><div className="recipient-list">{data.notificationRecipients.filter((item) => item.active).map((item) => <small key={item.id}>✓ {item.name} · VK {item.vkId}</small>)}</div></div></div><div className="workspace-card"><div className="section-heading"><div><span className="eyebrow">РЕЗУЛЬТАТЫ</span><h2>Агитаторы</h2></div></div><div className="people-list">{data.agitators.map((agitator) => { const stat = data.stats.find((item) => item.agitatorId === agitator.id); return <div className="person-stat" key={agitator.id}><div className="avatar-circle">{agitator.name.charAt(0).toUpperCase()}</div><div><strong>{agitator.name}</strong><small>VK {agitator.vkId} · {stat?.accepted || 0}/{stat?.total || 0} принято · {stat?.completionRate || 0}%</small>{stat?.averageDistance != null && <small>Средняя точность: {stat.averageDistance} м</small>}</div><button className={`btn ${agitator.active ? "btn-ghost" : "btn-ok"}`} onClick={() => toggleAgitator(agitator.id, !agitator.active)}>{agitator.active ? "Пауза" : "Включить"}</button></div>; })}</div></div></section>}
 

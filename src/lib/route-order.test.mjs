@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildRouteOrder } from "./route-order.ts";
+import { buildManagedRouteOrder, buildRouteOrder } from "./route-order.ts";
 import { isLikelyResidentialAddress, normalizeBounds } from "./osm.ts";
 
 test("route order visits every point once and follows nearby stops", () => {
@@ -11,6 +11,16 @@ test("route order visits every point once and follows nearby stops", () => {
   ], { lat: 57.591, lon: 34.563 });
   assert.deepEqual(order, ["near", "middle", "far"]);
   assert.equal(new Set(order).size, 3);
+});
+
+test("route management can sort addresses naturally and reverse the current order", () => {
+  const points = [
+    { id: "twelve", address: "ул. Мира, 12", routeOrder: 2, lat: 57.59, lon: 34.56 },
+    { id: "two", address: "ул. Мира, 2", routeOrder: 1, lat: 57.60, lon: 34.57 },
+    { id: "twenty", address: "ул. Мира, 20", routeOrder: 3, lat: 57.61, lon: 34.58 },
+  ];
+  assert.deepEqual(buildManagedRouteOrder(points, "address"), ["two", "twelve", "twenty"]);
+  assert.deepEqual(buildManagedRouteOrder(points, "reverse"), ["twenty", "twelve", "two"]);
 });
 
 test("map bounds accept a neighbourhood and reject a huge selection", () => {
