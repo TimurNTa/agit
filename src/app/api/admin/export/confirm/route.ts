@@ -8,5 +8,6 @@ export async function POST() {
     where: { status: { in: ["SUBMITTED", "ACCEPTED"] }, exportedAt: null, photos: { some: { deletedAt: null } } },
     data: { exportedAt: new Date() },
   });
+  await prisma.activityLog.create({ data: { actorType: "ADMIN", actorName: "Штаб", action: "EXPORT_CONFIRMED", entityType: "Report", message: `Подтверждена выгрузка отчётов: ${result.count}`, metadata: { count: result.count } } });
   return NextResponse.json({ ok: true, marked: result.count });
 }

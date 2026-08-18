@@ -31,6 +31,7 @@ model Agitator {
   reports     Report[]
   sessions    WebSession[]
   loginTokens LoginToken[]
+  activities  ActivityLog[]
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 }
@@ -41,11 +42,14 @@ model House {
   lat         Float
   lon         Float
   note        String?
+  source      String?
+  externalId  String?
   assignments Assignment[]
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
   @@index([address])
+  @@unique([source, externalId])
 }
 
 model Assignment {
@@ -54,6 +58,7 @@ model Assignment {
   houseId    String
   campaign   String           @default("2026")
   status     AssignmentStatus @default(TODO)
+  routeOrder Int?
   agitator   Agitator         @relation(fields: [agitatorId], references: [id], onDelete: Cascade)
   house      House            @relation(fields: [houseId], references: [id], onDelete: Cascade)
   reports    Report[]
@@ -62,6 +67,7 @@ model Assignment {
 
   @@unique([houseId, campaign])
   @@index([agitatorId, status])
+  @@index([agitatorId, routeOrder])
 }
 
 model Report {
@@ -75,6 +81,8 @@ model Report {
   status         ReportStatus @default(DRAFT)
   vkMessageId    Int?
   exportedAt     DateTime?
+  reviewedAt     DateTime?
+  reviewComment  String?
   assignment     Assignment   @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
   agitator       Agitator     @relation(fields: [agitatorId], references: [id], onDelete: Cascade)
   photos         ReportPhoto[]
@@ -83,6 +91,33 @@ model Report {
 
   @@index([agitatorId, status, createdAt])
   @@index([assignmentId, createdAt])
+}
+
+model NotificationRecipient {
+  id        String   @id @default(cuid())
+  name      String
+  vkId      BigInt   @unique
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ActivityLog {
+  id         String    @id @default(cuid())
+  actorType  String
+  actorId    String?
+  actorName  String
+  action     String
+  entityType String?
+  entityId   String?
+  message    String
+  metadata   Json?
+  agitatorId String?
+  agitator   Agitator? @relation(fields: [agitatorId], references: [id], onDelete: SetNull)
+  createdAt  DateTime  @default(now())
+
+  @@index([createdAt])
+  @@index([agitatorId, createdAt])
 }
 
 model ReportPhoto {

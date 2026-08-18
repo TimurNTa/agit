@@ -61,6 +61,8 @@ APP_URL=https://$DOMAIN
 DATABASE_URL=
 PHOTO_STORAGE_ROOT=$PHOTO_DIR
 MAX_REPORT_DISTANCE_METERS=150
+OVERPASS_URL=https://overpass-api.de/api/interpreter
+NOMINATIM_URL=https://nominatim.openstreetmap.org
 VK_API_VERSION=5.199
 VK_GROUP_ID=240908156
 VK_GROUP_TOKEN=
@@ -126,9 +128,11 @@ if [[ "$FIRST_INSTALL" -eq 1 ]]; then
 fi
 
 cd "$APP_DIR"
-npm install --no-audit --no-fund
+npm ci --no-audit --no-fund
 npm run db:generate
 npm run db:migrate
+npm run typecheck
+npm run test:unit
 npm run build
 
 cat > /etc/systemd/system/${SERVICE}.service <<UNIT

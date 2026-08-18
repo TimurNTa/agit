@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { CircleMarker, MapContainer, Popup, TileLayer, useMap } from "react-leaflet";
+import { CircleMarker, MapContainer, Polyline, Popup, TileLayer, Tooltip, useMap } from "react-leaflet";
 import type { MapTask } from "@/components/map/types";
 
 const colors: Record<MapTask["status"], string> = {
@@ -34,6 +34,7 @@ export function AgitMap({ tasks, selectedId, onSelect, userLocation }: {
   userLocation?: { lat: number; lon: number };
 }) {
   const center: [number, number] = tasks.length ? [tasks[0].lat, tasks[0].lon] : [57.591, 34.563];
+  const route = tasks.filter((task) => task.status !== "ACCEPTED" && task.status !== "SUBMITTED");
   return (
     <MapContainer center={center} zoom={15} scrollWheelZoom zoomControl>
       <TileLayer
@@ -41,6 +42,7 @@ export function AgitMap({ tasks, selectedId, onSelect, userLocation }: {
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
       <Viewport tasks={tasks} selectedId={selectedId} userLocation={userLocation} />
+      {route.length > 1 && <Polyline positions={route.map((task) => [task.lat, task.lon])} pathOptions={{ color: "#ff7a00", weight: 4, opacity: .78 }} />}
       {userLocation && (
         <CircleMarker center={[userLocation.lat, userLocation.lon]} radius={9} pathOptions={{ color: "#ffffff", fillColor: "#3478f6", fillOpacity: 1, weight: 3 }}>
           <Popup><strong>Вы здесь</strong></Popup>
@@ -54,6 +56,7 @@ export function AgitMap({ tasks, selectedId, onSelect, userLocation }: {
           pathOptions={{ color: selectedId === task.id ? "#ffffff" : colors[task.status], fillColor: colors[task.status], fillOpacity: .94, weight: selectedId === task.id ? 4 : 2 }}
           eventHandlers={{ click: () => onSelect(task.id) }}
         >
+          {task.routeOrder && task.status !== "ACCEPTED" && <Tooltip permanent direction="top" className="route-tooltip">{task.routeOrder}</Tooltip>}
           <Popup>
             <strong>{task.address}</strong><br />
             {task.note || "Задание"}

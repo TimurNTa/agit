@@ -31,4 +31,5 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm run db:generate
       - run: npm run typecheck
+      - run: npm run test:unit
       - run: npm run build

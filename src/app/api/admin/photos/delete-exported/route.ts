@@ -17,5 +17,6 @@ export async function POST() {
     await prisma.reportPhoto.update({ where: { id: photo.id }, data: { deletedAt: new Date() } });
     deleted += 1;
   }
+  await prisma.activityLog.create({ data: { actorType: "ADMIN", actorName: "Штаб", action: "EXPORTED_PHOTOS_DELETED", entityType: "ReportPhoto", message: `Удалено выгруженных фотографий: ${deleted}`, metadata: { count: deleted } } });
   return NextResponse.json({ ok: true, deleted });
 }

@@ -1,201 +1,195 @@
 "use client";
 
-import { FormEvent, useMemo, useState, useEffect } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { AdminMapClient } from "@/components/admin/AdminMapClient";
+import type { MapCandidate, MapCorner } from "@/components/admin/AdminMap";
 
-type Tab = "map" | "tasks" | "agitators" | "reports";
+type Tab = "overview" | "territory" | "tasks" | "team" | "reports" | "history";
+type House = { id: string; address: string; lat: number; lon: number; note?: string | null; source?: string | null; externalId?: string | null };
+type Assignment = { id: string; status: string; routeOrder?: number | null; agitatorId: string; agitatorName: string; houseId: string; address: string; lat: number; lon: number };
+type Report = { id: string; status: string; agitatorId: string; agitatorName: string; address: string; distanceMeters: number; createdAt: string; exportedAt?: string | null; reviewComment?: string | null; photos: Array<{ id: string }> };
 type Data = {
   agitators: Array<{ id: string; name: string; vkId: string; active: boolean }>;
-  houses: Array<{ id: string; address: string; lat: number; lon: number }>;
-  assignments: Array<{ id: string; status: string; agitatorId: string; agitatorName: string; houseId: string; address: string }>;
-  reports: Array<{ id: string; status: string; agitatorName: string; address: string; distanceMeters: number; createdAt: string; exportedAt?: string | null; photos: Array<{ id: string }> }>;
+  houses: House[];
+  assignments: Assignment[];
+  reports: Report[];
+  stats: Array<{ agitatorId: string; total: number; todo: number; active: number; submitted: number; accepted: number; rejected: number; reports: number; completionRate: number; averageDistance?: number | null; lastActivityAt?: string | null }>;
+  activities: Array<{ id: string; actorName: string; action: string; message: string; createdAt: string }>;
+  notificationRecipients: Array<{ id: string; name: string; vkId: string; active: boolean }>;
 };
+type SearchResult = { label: string; address: string; lat: number; lon: number; type: string };
 
-const statusText: Record<string, string> = {
-  TODO: "Не начато",
-  ACTIVE: "В работе",
-  SUBMITTED: "На проверке",
-  ACCEPTED: "Принято",
-  REJECTED: "Переделать",
-};
+const statusText: Record<string, string> = { TODO: "Не начато", ACTIVE: "В работе", SUBMITTED: "На проверке", ACCEPTED: "Принято", REJECTED: "Переделать" };
+const validTabs = new Set<Tab>(["overview", "territory", "tasks", "team", "reports", "history"]);
 
 export function AdminDashboard() {
   const [data, setData] = useState<Data | null>(null);
   const [needsLogin, setNeedsLogin] = useState(false);
   const [password, setPassword] = useState("");
-  const [notice, setNotice] = useState<string>();
+  const [notice, setNotice] = useState<{ text: string; danger?: boolean }>();
   const [loadError, setLoadError] = useState<string>();
-  const [coords, setCoords] = useState<{ lat: number; lon: number } | null>(null);
-  const [tab, setTab] = useState<Tab>("map");
+  const [tab, setTab] = useState<Tab>("overview");
+  const [pickMode, setPickMode] = useState<"area" | "house">("area");
+  const [areaCorners, setAreaCorners] = useState<MapCorner[]>([]);
+  const [candidates, setCandidates] = useState<MapCandidate[]>([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [coords, setCoords] = useState<MapCorner | null>(null);
+  const [manualAddress, setManualAddress] = useState("");
+  const [territoryAgitator, setTerritoryAgitator] = useState("");
+  const [routeAgitator, setRouteAgitator] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [search, setSearch] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [focusPoint, setFocusPoint] = useState<MapCorner | null>(null);
+  const [taskQuery, setTaskQuery] = useState("");
+  const [bulkAgitator, setBulkAgitator] = useState("");
+  const [reportQuery, setReportQuery] = useState("");
+  const [reportFilter, setReportFilter] = useState("SUBMITTED");
+  const [rejectingId, setRejectingId] = useState<string>();
+  const [rejectComment, setRejectComment] = useState("");
+  const [highlightReportId, setHighlightReportId] = useState<string>();
 
-  async function load() {
-    setLoadError(undefined);
+  function show(text: string, danger = false) { setNotice({ text, danger }); }
+  function goTab(next: Tab) { setTab(next); const url = new URL(window.location.href); url.searchParams.set("tab", next); url.searchParams.delete("report"); window.history.replaceState(null, "", url); }
+
+  async function load(silent = false) {
+    if (!silent) setLoadError(undefined);
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 12_000);
     try {
       const response = await fetch("/api/admin/data", { cache: "no-store", signal: controller.signal });
-      if (response.status === 401) {
-        setData(null);
-        setNeedsLogin(true);
-        return;
-      }
+      if (response.status === 401) { setData(null); setNeedsLogin(true); return; }
       if (!response.ok) throw new Error(`admin_data_${response.status}`);
-      setData(await response.json());
-      setNeedsLogin(false);
+      setData(await response.json()); setNeedsLogin(false);
     } catch (error) {
       console.error("Admin data load failed", error);
       setLoadError("Не удалось загрузить данные штаба. Проверьте сервис и повторите.");
-    } finally {
-      window.clearTimeout(timeout);
-    }
+    } finally { window.clearTimeout(timeout); }
   }
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const requested = params.get("tab") as Tab | null;
+    if (requested && validTabs.has(requested)) setTab(requested);
+    const report = params.get("report");
+    if (report) { setTab("reports"); setHighlightReportId(report); setReportFilter("all"); }
+    void load();
+    const timer = window.setInterval(() => void load(true), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const assignmentByHouse = useMemo(() => new Map((data?.assignments || []).map((item) => [item.houseId, item])), [data]);
+  const mapPoints = useMemo(() => (data?.houses || []).map((house) => { const assignment = assignmentByHouse.get(house.id); return { ...house, status: assignment?.status, routeOrder: assignment?.routeOrder, agitatorName: assignment?.agitatorName }; }), [data, assignmentByHouse]);
+  const route = useMemo(() => (data?.assignments || []).filter((item) => item.agitatorId === routeAgitator && !["SUBMITTED", "ACCEPTED"].includes(item.status)).sort((a, b) => (a.routeOrder ?? 999999) - (b.routeOrder ?? 999999)).map((item) => ({ id: item.houseId, address: item.address, lat: item.lat, lon: item.lon, status: item.status, routeOrder: item.routeOrder, agitatorName: item.agitatorName })), [data, routeAgitator]);
   const pendingReports = data?.reports.filter((report) => report.status === "SUBMITTED").length || 0;
   const accepted = data?.assignments.filter((item) => item.status === "ACCEPTED").length || 0;
-  const totalAssignments = data?.assignments.length || 0;
+  const activeAgitators = data?.agitators.filter((item) => item.active) || [];
+  const filteredTasks = (data?.houses || []).filter((house) => house.address.toLocaleLowerCase("ru").includes(taskQuery.toLocaleLowerCase("ru")));
+  const filteredReports = (data?.reports || []).filter((report) => (reportFilter === "all" || report.status === reportFilter) && `${report.address} ${report.agitatorName}`.toLocaleLowerCase("ru").includes(reportQuery.toLocaleLowerCase("ru"))).sort((a, b) => (a.id === highlightReportId ? -1 : b.id === highlightReportId ? 1 : 0));
 
   async function login(event: FormEvent) {
     event.preventDefault();
     const response = await fetch("/api/admin/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }) });
-    if (!response.ok) { setNotice("Неверный пароль"); return; }
+    if (!response.ok) { show(response.status === 429 ? "Слишком много попыток. Подождите 15 минут." : "Неверный пароль", true); return; }
     setPassword(""); setNotice(undefined); await load();
   }
+  async function logout() { await fetch("/api/admin/logout", { method: "POST" }); window.location.reload(); }
 
   async function addAgitator(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const formEl = event.currentTarget;
-    const form = new FormData(formEl);
+    event.preventDefault(); const formEl = event.currentTarget; const form = new FormData(formEl);
     const response = await fetch("/api/admin/agitators", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: form.get("name"), vkId: form.get("vkId") }) });
-    setNotice(response.ok ? "Агитатор добавлен" : "Не удалось добавить агитатора");
-    if (response.ok) { formEl.reset(); await load(); }
+    const body = await response.json().catch(() => ({}));
+    show(response.ok ? "Агитатор добавлен" : body.error === "vk_id_exists" ? "Этот VK ID уже добавлен" : "Не удалось добавить агитатора", !response.ok);
+    if (response.ok) { formEl.reset(); await load(true); }
   }
+  async function toggleAgitator(id: string, active: boolean) { const response = await fetch("/api/admin/agitators", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ id, active }) }); show(response.ok ? (active ? "Доступ включён" : "Доступ приостановлен") : "Не удалось изменить доступ", !response.ok); if (response.ok) await load(true); }
 
-  async function addHouse(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!coords) { setNotice("Сначала нажмите на нужный дом на карте"); return; }
-    const formEl = event.currentTarget;
-    const form = new FormData(formEl);
-    const response = await fetch("/api/admin/houses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ address: form.get("address"), note: form.get("note"), agitatorId: form.get("agitatorId"), lat: coords.lat, lon: coords.lon }) });
-    setNotice(response.ok ? "Дом добавлен" : "Не удалось добавить дом");
-    if (response.ok) { formEl.reset(); setCoords(null); await load(); }
+  function cornersToBounds(corners: MapCorner[]) { return { south: Math.min(corners[0].lat, corners[1].lat), west: Math.min(corners[0].lon, corners[1].lon), north: Math.max(corners[0].lat, corners[1].lat), east: Math.max(corners[0].lon, corners[1].lon) }; }
+  async function discover(corners: MapCorner[]) {
+    setBusy(true); setCandidates([]);
+    const bounds = cornersToBounds(corners);
+    const response = await fetch("/api/admin/houses/discover", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ bounds }) });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) { show(result.error === "invalid_or_large_area" ? "Участок слишком большой. Выделите квартал поменьше." : "Не удалось получить дома OpenStreetMap. Можно добавить их вручную.", true); setBusy(false); return; }
+    setCandidates(result.houses || []);
+    const inside = (data?.houses || []).filter((house) => house.lat >= bounds.south && house.lat <= bounds.north && house.lon >= bounds.west && house.lon <= bounds.east).map((house) => house.id);
+    setSelectedIds(inside);
+    show(`Найдено новых домов: ${result.count}; уже на карте: ${inside.length}`);
+    setBusy(false);
   }
+  function mapPick(lat: number, lon: number) {
+    if (pickMode === "house") { setCoords({ lat, lon }); setFocusPoint({ lat, lon }); return; }
+    const next = areaCorners.length >= 2 ? [{ lat, lon }] : [...areaCorners, { lat, lon }];
+    setAreaCorners(next); setCandidates([]);
+    if (next.length === 2) void discover(next);
+  }
+  function toggleSelected(id: string) { setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]); }
+  function resetTerritory() { setAreaCorners([]); setCandidates([]); setSelectedIds([]); setTerritoryAgitator(""); }
 
-  async function assignHouse(houseId: string, agitatorId: string) {
-    const response = await fetch("/api/admin/assignments", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ houseId, agitatorId }) });
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({}));
-      setNotice(body.error === "assignment_locked" ? "Нельзя переназначить дом: отчёт уже отправлен или принят" : "Не удалось изменить назначение");
-      return;
+  async function assignHouses(houseIds: string[], agitatorId: string, buildRoute = false) {
+    if (!houseIds.length || !agitatorId) { show("Выберите дома и агитатора", true); return false; }
+    const response = await fetch("/api/admin/assignments", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ houseIds, agitatorId }) });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) { show("Не удалось назначить территорию", true); return false; }
+    if (!result.changed) { show("Назначение не изменено: выбранные задания уже защищены отчётами", true); return false; }
+    if (buildRoute) await fetch("/api/admin/routes/optimize", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ agitatorId }) });
+    show(`Назначено домов: ${result.changed}${result.locked ? `; защищено отчётами: ${result.locked}` : ""}${buildRoute ? ". Маршрут построен." : ""}`);
+    setRouteAgitator(agitatorId); await load(true); return true;
+  }
+  async function finalizeTerritory() {
+    if (!territoryAgitator || (!candidates.length && !selectedIds.length)) { show("Выберите агитатора и территорию", true); return; }
+    setBusy(true);
+    let ids = [...selectedIds];
+    if (candidates.length) {
+      const response = await fetch("/api/admin/houses/bulk", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ houses: candidates.map((house) => ({ ...house, source: "osm" })) }) });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) { show("Не удалось импортировать дома", true); setBusy(false); return; }
+      ids = [...new Set([...ids, ...(result.houses || []).map((house: House) => house.id)])];
     }
-    setNotice(agitatorId ? "Назначение сохранено" : "Дом снят с назначения");
-    await load();
+    const ok = await assignHouses(ids, territoryAgitator, true);
+    if (ok) resetTerritory();
+    setBusy(false);
   }
+  async function optimizeRoute(agitatorId: string) { if (!agitatorId) return; const response = await fetch("/api/admin/routes/optimize", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ agitatorId }) }); const result = await response.json().catch(() => ({})); show(response.ok ? `Маршрут обновлён: ${result.changed || 0} домов` : "Не удалось построить маршрут", !response.ok); setRouteAgitator(agitatorId); if (response.ok) await load(true); }
 
-  async function reportAction(id: string, action: "accept" | "reject") {
-    await fetch(`/api/admin/reports/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ action }) });
-    await load();
+  async function searchAddress(event: FormEvent) { event.preventDefault(); if (search.trim().length < 3) return; setSearching(true); const response = await fetch(`/api/admin/geocode?q=${encodeURIComponent(search)}`); const result = await response.json().catch(() => ({})); setSearchResults(response.ok ? result.results || [] : []); if (!response.ok) show("Поиск адреса временно недоступен", true); setSearching(false); }
+  function chooseSearch(result: SearchResult) { setManualAddress(result.address); setCoords({ lat: result.lat, lon: result.lon }); setFocusPoint({ lat: result.lat, lon: result.lon }); setSearchResults([]); setPickMode("house"); }
+  async function addHouse(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); if (!coords) { show("Сначала выберите точку на карте", true); return; }
+    const formEl = event.currentTarget; const form = new FormData(formEl);
+    const response = await fetch("/api/admin/houses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ address: manualAddress, note: form.get("note"), agitatorId: form.get("agitatorId"), lat: coords.lat, lon: coords.lon }) });
+    const result = await response.json().catch(() => ({}));
+    show(response.ok ? "Дом добавлен" : result.error === "house_exists" ? "Такой адрес уже есть на карте" : "Не удалось добавить дом", !response.ok);
+    if (response.ok) { formEl.reset(); setManualAddress(""); setCoords(null); await load(true); }
   }
+  async function assignOne(houseId: string, agitatorId: string) { const response = await fetch("/api/admin/assignments", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ houseId, agitatorId }) }); const result = await response.json().catch(() => ({})); show(response.ok && result.changed ? "Назначение сохранено" : response.ok ? "Задание защищено историей отчёта" : "Не удалось изменить назначение", !response.ok || !result.changed); if (response.ok) await load(true); }
 
-  async function confirmExport() {
-    const response = await fetch("/api/admin/export/confirm", { method: "POST" });
-    const result = await response.json();
-    setNotice(`Отмечено выгруженными отчётов: ${result.marked || 0}`);
-    await load();
-  }
+  async function reportAction(id: string, action: "accept" | "reject", comment = "") { const response = await fetch(`/api/admin/reports/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ action, comment }) }); const result = await response.json().catch(() => ({})); show(response.ok ? `${action === "accept" ? "Отчёт принят" : "Отчёт отправлен на переделку"}${result.notificationSent === false ? ", но VK-уведомление не доставлено" : ""}` : "Не удалось обработать отчёт", !response.ok); if (response.ok) { setRejectingId(undefined); setRejectComment(""); setHighlightReportId(undefined); await load(true); } }
+  async function confirmExport() { const response = await fetch("/api/admin/export/confirm", { method: "POST" }); const result = await response.json(); show(`Отмечено выгруженными отчётов: ${result.marked || 0}`); await load(true); }
+  async function deleteExported() { if (!window.confirm("Удалить с сервера фотографии всех подтверждённо выгруженных отчётов?")) return; const response = await fetch("/api/admin/photos/delete-exported", { method: "POST" }); const result = await response.json(); show(`Удалено файлов: ${result.deleted || 0}`); await load(true); }
+  async function addRecipient(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const formEl = event.currentTarget; const form = new FormData(formEl); const response = await fetch("/api/admin/notifications", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: form.get("name"), vkId: form.get("vkId") }) }); const result = await response.json().catch(() => ({})); show(response.ok ? (result.testSent ? "Уведомления включены, тест отправлен" : "Получатель сохранён, но тестовое сообщение не доставлено") : "Не удалось включить уведомления", !response.ok || result.testSent === false); if (response.ok) { formEl.reset(); await load(true); } }
 
-  async function deleteExported() {
-    if (!confirm("Удалить с сервера фотографии всех отчётов, которые отмечены выгруженными? Восстановить их через систему будет нельзя.")) return;
-    const response = await fetch("/api/admin/photos/delete-exported", { method: "POST" });
-    const result = await response.json();
-    setNotice(`Удалено файлов: ${result.deleted || 0}`);
-    await load();
-  }
-
-  if (needsLogin) {
-    return <main className="shell"><div className="card admin-login"><div className="brand"><span className="brand-mark">A</span> AGIT / штаб</div><h2>Вход в штаб</h2><form className="form-grid" onSubmit={login}><label className="label">Пароль<input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus /></label><button className="btn btn-primary btn-large">Войти</button></form>{notice && <div className="notice notice-danger" style={{ marginTop: 10 }}>{notice}</div>}</div></main>;
-  }
-
-  if (!data && loadError) {
-    return <main className="shell"><div className="card admin-login"><div className="brand"><span className="brand-mark">A</span> AGIT / штаб</div><h2>Штаб временно недоступен</h2><p className="muted">{loadError}</p><button className="btn btn-primary btn-large" onClick={() => void load()}>Повторить</button></div></main>;
-  }
-
+  if (needsLogin) return <main className="shell"><div className="card admin-login"><div className="brand"><span className="brand-mark">A</span> AGIT / штаб</div><h2>Вход в штаб</h2><form className="form-grid" onSubmit={login}><label className="label">Пароль<input className="input" type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoFocus /></label><button className="btn btn-primary btn-large">Войти</button></form>{notice && <div className="notice notice-danger">{notice.text}</div>}</div></main>;
+  if (!data && loadError) return <main className="shell"><div className="card admin-login"><h2>Штаб временно недоступен</h2><p>{loadError}</p><button className="btn btn-primary" onClick={() => void load()}>Повторить</button></div></main>;
   if (!data) return <main className="shell"><div className="loading-card">Загрузка штаба…</div></main>;
 
-  return (
-    <main className="shell admin-shell">
-      <header className="admin-header">
-        <div><div className="brand"><span className="brand-mark">A</span><span>AGIT / штаб</span></div><p className="muted admin-subtitle">Управление полевой работой</p></div>
-        <a className="btn btn-ghost" href="/">Карта агитатора</a>
-      </header>
+  return <main className="shell admin-shell">
+    <header className="admin-header"><div><div className="brand"><span className="brand-mark">A</span><span>AGIT / штаб</span></div><p className="muted admin-subtitle">Полевая работа без таблиц и ручной рутины</p></div><div className="btn-row"><a className="btn btn-ghost" href="/">Карта агитатора</a><button className="btn btn-ghost" onClick={logout}>Выйти</button></div></header>
+    <section className="admin-summary"><div><span className="eyebrow">ВЫПОЛНЕНО</span><strong>{accepted}/{data.assignments.length}</strong><small>домов принято</small></div><div><span className="eyebrow">В КОМАНДЕ</span><strong>{activeAgitators.length}</strong><small>активных</small></div><div><span className="eyebrow">ТРЕБУЮТ РЕШЕНИЯ</span><strong>{pendingReports}</strong><small>отчётов</small></div></section>
+    <nav className="admin-tabs" aria-label="Разделы штаба">{([['overview','Главная'],['territory','Территория'],['tasks','Задания'],['team','Команда'],['reports','Отчёты'],['history','История']] as Array<[Tab,string]>).map(([id,label]) => <button key={id} className={tab === id ? "active" : ""} onClick={() => goTab(id)}>{label}{id === "reports" && pendingReports > 0 && <b>{pendingReports}</b>}</button>)}</nav>
+    {notice && <div className={`notice ${notice.danger ? "notice-danger" : "notice-ok"} admin-notice`}>{notice.text}</div>}
 
-      <section className="admin-summary">
-        <div><span className="eyebrow">ЗАДАНИЯ</span><strong>{accepted}/{totalAssignments}</strong><small>принято</small></div>
-        <div><span className="eyebrow">АГИТАТОРЫ</span><strong>{data.agitators.length}</strong><small>активных</small></div>
-        <div><span className="eyebrow">НА ПРОВЕРКЕ</span><strong>{pendingReports}</strong><small>отчётов</small></div>
-      </section>
+    {tab === "overview" && <section className="dashboard-grid"><div className="workspace-card dashboard-hero"><span className="eyebrow">БЫСТРЫЙ СТАРТ</span><h1>Территория назначается одним действием</h1><p className="muted">Выделите квартал двумя точками, выберите агитатора и нажмите одну кнопку. Дома загрузятся, назначатся и выстроятся в маршрут.</p><button className="btn btn-primary btn-large" onClick={() => goTab("territory")}>Назначить территорию</button></div><div className="workspace-card"><span className="eyebrow">СЕЙЧАС</span><h2>{pendingReports ? `${pendingReports} отчётов ждут проверки` : "Новых отчётов нет"}</h2><button className="btn btn-ghost" onClick={() => goTab("reports")}>Открыть отчёты</button></div><div className="workspace-card dashboard-wide"><div className="section-heading"><div><span className="eyebrow">КОМАНДА</span><h2>Ход работы</h2></div></div><div className="team-progress-list">{data.agitators.map((agitator) => { const stat = data.stats.find((item) => item.agitatorId === agitator.id); return <div className="team-progress" key={agitator.id}><div><strong>{agitator.name}</strong><small>{stat?.accepted || 0} из {stat?.total || 0} принято</small></div><div className="mini-progress"><i style={{ width: `${stat?.completionRate || 0}%` }} /></div><b>{stat?.completionRate || 0}%</b></div>; })}</div></div></section>}
 
-      <nav className="admin-tabs" aria-label="Разделы штаба">
-        <button className={tab === "map" ? "active" : ""} onClick={() => setTab("map")}>Карта</button>
-        <button className={tab === "tasks" ? "active" : ""} onClick={() => setTab("tasks")}>Задания <span>{data.houses.length}</span></button>
-        <button className={tab === "agitators" ? "active" : ""} onClick={() => setTab("agitators")}>Агитаторы <span>{data.agitators.length}</span></button>
-        <button className={tab === "reports" ? "active" : ""} onClick={() => setTab("reports")}>Отчёты {pendingReports > 0 && <b>{pendingReports}</b>}</button>
-      </nav>
+    {tab === "territory" && <section className="admin-map-layout"><div className="admin-map-main"><div className="map-toolbar"><div><strong>{pickMode === "area" ? "Выделите квартал двумя точками" : "Нажмите точку нового дома"}</strong><span className="muted"> · существующий дом можно нажать для выбора</span></div><span className="map-count">{data.houses.length}</span></div><div className="admin-map-wrap"><AdminMapClient points={mapPoints} candidates={candidates} selectedIds={selectedIds} selectedPoint={coords} areaCorners={areaCorners} onPick={mapPick} onToggle={toggleSelected} focusPoint={focusPoint} route={route} /></div></div><aside className="admin-side-card territory-panel"><div className="mode-switch"><button className={pickMode === "area" ? "active" : ""} onClick={() => setPickMode("area")}>Территория</button><button className={pickMode === "house" ? "active" : ""} onClick={() => setPickMode("house")}>Один дом</button></div>{pickMode === "area" ? <><ol className="simple-steps"><li className={areaCorners.length ? "done" : ""}><b>1</b><span>Два угла квартала<small>{areaCorners.length}/2 точек</small></span></li><li className={territoryAgitator ? "done" : ""}><b>2</b><span>Кому назначить<select className="input" value={territoryAgitator} onChange={(event) => setTerritoryAgitator(event.target.value)}><option value="">Выберите агитатора</option>{activeAgitators.map((agitator) => <option key={agitator.id} value={agitator.id}>{agitator.name}</option>)}</select></span></li><li><b>3</b><span>Готово<small>{candidates.length} новых + {selectedIds.length} существующих</small></span></li></ol><button className="btn btn-primary btn-large" disabled={busy || !territoryAgitator || (!candidates.length && !selectedIds.length)} onClick={finalizeTerritory}>{busy ? "Подготавливаем…" : "Добавить, назначить и построить маршрут"}</button><button className="btn btn-ghost" onClick={resetTerritory}>Начать заново</button></> : <><form className="search-form" onSubmit={searchAddress}><input className="input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Поиск улицы и дома" /><button className="btn btn-ghost">{searching ? "…" : "Найти"}</button></form>{searchResults.length > 0 && <div className="search-results">{searchResults.map((result, index) => <button key={`${result.lat}-${result.lon}-${index}`} onClick={() => chooseSearch(result)}><strong>{result.address}</strong><small>{result.label}</small></button>)}</div>}<form className="form-grid" onSubmit={addHouse}><label className="label">Адрес<input className="input" required value={manualAddress} onChange={(event) => setManualAddress(event.target.value)} placeholder="ул. Мира, 12" /></label><label className="label">Задание<input className="input" name="note" placeholder="Расклейка / листовки" /></label><label className="label">Назначить<select className="input" name="agitatorId"><option value="">Пока никому</option>{activeAgitators.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{coords && <div className="picked-point">✓ Точка выбрана</div>}<button className="btn btn-primary btn-large" disabled={!coords}>Добавить дом</button></form></>}</aside></section>}
 
-      {notice && <div className="notice notice-ok admin-notice">{notice}</div>}
+    {tab === "tasks" && <section className="workspace-card"><div className="section-heading"><div><span className="eyebrow">МАССОВОЕ УПРАВЛЕНИЕ</span><h2>Дома и исполнители</h2></div><input className="input compact-input" value={taskQuery} onChange={(event) => setTaskQuery(event.target.value)} placeholder="Найти адрес" /></div><div className="bulk-bar"><span>Выбрано: {selectedIds.length}</span><select className="input" value={bulkAgitator} onChange={(event) => setBulkAgitator(event.target.value)}><option value="">Кому назначить</option>{activeAgitators.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button className="btn btn-primary" onClick={() => void assignHouses(selectedIds, bulkAgitator, true)}>Назначить и построить маршрут</button><button className="btn btn-ghost" onClick={() => setSelectedIds([])}>Сбросить</button></div><div className="route-bar"><select className="input" value={routeAgitator} onChange={(event) => setRouteAgitator(event.target.value)}><option value="">Показать маршрут агитатора</option>{data.agitators.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button className="btn btn-ghost" disabled={!routeAgitator} onClick={() => optimizeRoute(routeAgitator)}>Перестроить маршрут</button></div>{routeAgitator && <div className="admin-route-preview"><AdminMapClient points={mapPoints} selectedIds={selectedIds} pickEnabled={false} onPick={() => undefined} onToggle={toggleSelected} route={route} /></div>}<div className="assignment-list">{filteredTasks.map((house) => { const assignment = assignmentByHouse.get(house.id); const locked = assignment && ["ACTIVE","SUBMITTED","ACCEPTED"].includes(assignment.status); return <div className={`assignment-row ${selectedIds.includes(house.id) ? "selected" : ""}`} key={house.id}><input type="checkbox" checked={selectedIds.includes(house.id)} onChange={() => toggleSelected(house.id)} aria-label={`Выбрать ${house.address}`} /><div className="assignment-copy"><strong>{house.address}</strong><small>{assignment ? `${statusText[assignment.status] || assignment.status}${assignment.routeOrder ? ` · №${assignment.routeOrder}` : ""}` : "Не назначено"}</small></div><select className="input assignment-select" value={assignment?.agitatorId || ""} disabled={Boolean(locked)} onChange={(event) => void assignOne(house.id, event.target.value)}><option value="">Без назначения</option>{activeAgitators.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>; })}</div></section>}
 
-      {tab === "map" && (
-        <section className="admin-map-layout">
-          <div className="admin-map-main">
-            <div className="map-toolbar"><div><strong>Карта домов</strong><span className="muted"> · нажмите место, чтобы добавить точку</span></div><span className="map-count">{data.houses.length}</span></div>
-            <div className="admin-map-wrap"><AdminMapClient points={data.houses} selectedPoint={coords} onPick={(lat, lon) => setCoords({ lat, lon })} /></div>
-          </div>
-          <aside className="admin-side-card">
-            <span className="eyebrow">НОВАЯ ТОЧКА</span>
-            <h2>{coords ? "Дом выбран" : "Нажмите на дом на карте"}</h2>
-            <p className="muted">Координаты заполняются автоматически и больше не нужно вводить их вручную.</p>
-            <form className="form-grid" onSubmit={addHouse}>
-              <label className="label">Адрес<input className="input" name="address" required disabled={!coords} placeholder="Например: ул. Мира, 12" /></label>
-              <label className="label">Что сделать<input className="input" name="note" disabled={!coords} placeholder="Листовки / расклейка / другое" /></label>
-              <label className="label">Назначить<select className="input" name="agitatorId" disabled={!coords}><option value="">Пока никому</option>{data.agitators.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
-              {coords && <div className="picked-point">✓ Точка выбрана на карте</div>}
-              <button className="btn btn-primary btn-large" disabled={!coords}>Добавить дом</button>
-              {coords && <button className="btn btn-ghost" type="button" onClick={() => setCoords(null)}>Отменить выбор</button>}
-            </form>
-          </aside>
-        </section>
-      )}
+    {tab === "team" && <section className="admin-two-column"><div><div className="workspace-card"><span className="eyebrow">КОМАНДА</span><h2>Добавить агитатора</h2><form className="form-grid" onSubmit={addAgitator}><label className="label">Имя<input className="input" name="name" required /></label><label className="label">VK ID<input className="input" name="vkId" inputMode="numeric" required /></label><button className="btn btn-primary">Добавить</button></form></div><div className="workspace-card"><span className="eyebrow">УВЕДОМЛЕНИЯ ШТАБА</span><h2>Получать новые отчёты в VK</h2><form className="form-grid" onSubmit={addRecipient}><label className="label">Имя<input className="input" name="name" required /></label><label className="label">Ваш VK ID<input className="input" name="vkId" inputMode="numeric" required /></label><button className="btn btn-primary">Включить и отправить тест</button></form><div className="recipient-list">{data.notificationRecipients.filter((item) => item.active).map((item) => <small key={item.id}>✓ {item.name} · VK {item.vkId}</small>)}</div></div></div><div className="workspace-card"><div className="section-heading"><div><span className="eyebrow">РЕЗУЛЬТАТЫ</span><h2>Агитаторы</h2></div></div><div className="people-list">{data.agitators.map((agitator) => { const stat = data.stats.find((item) => item.agitatorId === agitator.id); return <div className="person-stat" key={agitator.id}><div className="avatar-circle">{agitator.name.charAt(0).toUpperCase()}</div><div><strong>{agitator.name}</strong><small>VK {agitator.vkId} · {stat?.accepted || 0}/{stat?.total || 0} принято · {stat?.completionRate || 0}%</small>{stat?.averageDistance != null && <small>Средняя точность: {stat.averageDistance} м</small>}</div><button className={`btn ${agitator.active ? "btn-ghost" : "btn-ok"}`} onClick={() => toggleAgitator(agitator.id, !agitator.active)}>{agitator.active ? "Пауза" : "Включить"}</button></div>; })}</div></div></section>}
 
-      {tab === "tasks" && (
-        <section className="workspace-card">
-          <div className="section-heading"><div><span className="eyebrow">РАСПРЕДЕЛЕНИЕ</span><h2>Дома и исполнители</h2></div><span className="muted">{data.houses.length} точек</span></div>
-          {data.houses.length === 0 ? <div className="empty-state compact"><h3>Домов пока нет</h3><p>Добавьте первую точку во вкладке «Карта».</p></div> : (
-            <div className="assignment-list">
-              {data.houses.map((house) => {
-                const assignment = assignmentByHouse.get(house.id);
-                const locked = assignment?.status === "SUBMITTED" || assignment?.status === "ACCEPTED";
-                return <div className="assignment-row" key={house.id}><div className="assignment-copy"><strong>{house.address}</strong><small>{assignment ? statusText[assignment.status] || assignment.status : "Не назначено"}</small></div><select className="input assignment-select" value={assignment?.agitatorId || ""} disabled={locked} onChange={(e) => void assignHouse(house.id, e.target.value)}><option value="">Без назначения</option>{data.agitators.map((agitator) => <option key={agitator.id} value={agitator.id}>{agitator.name}</option>)}</select></div>;
-              })}
-            </div>
-          )}
-        </section>
-      )}
+    {tab === "reports" && <section className="workspace-card"><div className="reports-toolbar"><div><span className="eyebrow">ФОТООТЧЁТЫ</span><h2>Проверка работ</h2></div><div className="btn-row"><a className="btn btn-primary" href="/api/admin/export">Скачать ZIP</a><button className="btn btn-ghost" onClick={confirmExport}>Подтвердить выгрузку</button><button className="btn btn-danger" onClick={deleteExported}>Удалить выгруженные</button></div></div><div className="filter-bar"><input className="input" value={reportQuery} onChange={(event) => setReportQuery(event.target.value)} placeholder="Адрес или агитатор" /><select className="input" value={reportFilter} onChange={(event) => setReportFilter(event.target.value)}><option value="SUBMITTED">Ждут проверки</option><option value="all">Все</option><option value="ACCEPTED">Принятые</option><option value="REJECTED">Переделать</option></select></div>{!filteredReports.length ? <div className="empty-state compact"><h3>Здесь пока пусто</h3></div> : <div className="report-grid">{filteredReports.map((report) => <article className={`report-card ${report.id === highlightReportId ? "highlight" : ""}`} key={report.id}><div className="report-card-head"><div><strong>{report.address}</strong><small>{report.agitatorName} · {report.distanceMeters} м · {new Date(report.createdAt).toLocaleString("ru-RU")}</small></div><span className={`status-pill status-${report.status.toLowerCase()}`}>{statusText[report.status]}</span></div><div className="report-photos">{report.photos.map((photo) => <a key={photo.id} href={`/api/admin/photos/${photo.id}`} target="_blank" rel="noreferrer"><img className="report-photo" src={`/api/admin/photos/${photo.id}`} alt="Фотоотчёт" /></a>)}</div>{report.reviewComment && <div className="notice notice-danger">Комментарий: {report.reviewComment}</div>}{report.status === "SUBMITTED" && <div className="report-actions">{rejectingId === report.id ? <div className="reject-box"><div className="quick-reasons">{["Нужен общий план дома","Фото нечёткое","Не видно выполненную работу","Неверный дом"].map((reason) => <button key={reason} onClick={() => setRejectComment(reason)}>{reason}</button>)}</div><textarea className="input" value={rejectComment} onChange={(event) => setRejectComment(event.target.value)} placeholder="Что нужно исправить" /><div className="btn-row"><button className="btn btn-danger" disabled={!rejectComment.trim()} onClick={() => reportAction(report.id, "reject", rejectComment)}>Отправить на переделку</button><button className="btn btn-ghost" onClick={() => setRejectingId(undefined)}>Отмена</button></div></div> : <div className="btn-row"><button className="btn btn-ok" onClick={() => reportAction(report.id, "accept")}>Принять</button><button className="btn btn-danger" onClick={() => setRejectingId(report.id)}>Переделать</button></div>}</div>}{report.exportedAt && <span className="status-pill status-accepted">Выгружено</span>}</article>)}</div>}</section>}
 
-      {tab === "agitators" && (
-        <section className="admin-two-column">
-          <div className="workspace-card"><span className="eyebrow">КОМАНДА</span><h2>Добавить агитатора</h2><form className="form-grid" onSubmit={addAgitator}><label className="label">Имя<input className="input" name="name" required placeholder="Имя и фамилия" /></label><label className="label">VK ID<input className="input" name="vkId" inputMode="numeric" required placeholder="Например: 394027208" /></label><button className="btn btn-primary btn-large">Добавить</button></form></div>
-          <div className="workspace-card"><div className="section-heading"><div><span className="eyebrow">СПИСОК</span><h2>Агитаторы</h2></div><span className="muted">{data.agitators.length}</span></div><div className="people-list">{data.agitators.map((agitator) => { const count = data.assignments.filter((item) => item.agitatorId === agitator.id).length; return <div className="person-row" key={agitator.id}><div className="avatar-circle">{agitator.name.trim().charAt(0).toUpperCase()}</div><div><strong>{agitator.name}</strong><small>VK {agitator.vkId} · {count} заданий</small></div></div>; })}</div></div>
-        </section>
-      )}
-
-      {tab === "reports" && (
-        <section className="workspace-card">
-          <div className="reports-toolbar"><div><span className="eyebrow">ФОТООТЧЁТЫ</span><h2>Проверка работ</h2></div><div className="btn-row"><a className="btn btn-primary" href="/api/admin/export">Скачать ZIP</a><button className="btn btn-ghost" onClick={confirmExport}>Отметить выгруженными</button><button className="btn btn-danger" onClick={deleteExported}>Удалить выгруженные</button></div></div>
-          {data.reports.length === 0 ? <div className="empty-state compact"><h3>Отчётов пока нет</h3><p>Новые фото появятся здесь после отправки агитаторами.</p></div> : <div className="report-grid">{data.reports.map((report) => <article className="report-card" key={report.id}><div className="report-card-head"><div><strong>{report.address}</strong><small>{report.agitatorName} · {report.distanceMeters} м от точки · {new Date(report.createdAt).toLocaleString("ru-RU")}</small></div><span className={`status-pill status-${report.status.toLowerCase()}`}>{statusText[report.status] || report.status}</span></div><div className="report-photos">{report.photos.map((photo) => <a key={photo.id} href={`/api/admin/photos/${photo.id}`} target="_blank" rel="noreferrer"><img className="report-photo" src={`/api/admin/photos/${photo.id}`} alt="Фотоотчёт" /></a>)}</div><div className="btn-row report-actions"><button className="btn btn-ok" onClick={() => reportAction(report.id, "accept")}>Принять</button><button className="btn btn-danger" onClick={() => reportAction(report.id, "reject")}>Переделать</button>{report.exportedAt && <span className="status-pill status-accepted">Выгружено</span>}</div></article>)}</div>}
-        </section>
-      )}
-    </main>
-  );
+    {tab === "history" && <section className="workspace-card"><div className="section-heading"><div><span className="eyebrow">ЖУРНАЛ</span><h2>История действий</h2></div><span className="muted">последние {data.activities.length}</span></div><div className="activity-list">{data.activities.map((activity) => <div className="activity-row" key={activity.id}><span className="activity-dot" /><div><strong>{activity.message}</strong><small>{activity.actorName} · {new Date(activity.createdAt).toLocaleString("ru-RU")}</small></div></div>)}</div></section>}
+  </main>;
 }

@@ -34,6 +34,13 @@ export async function createWorkerSession(agitatorId: string) {
   });
 }
 
+export async function clearWorkerSession() {
+  const store = await cookies();
+  const raw = store.get(WORKER_COOKIE)?.value;
+  if (raw) await prisma.webSession.deleteMany({ where: { tokenHash: sha256(raw) } });
+  store.delete(WORKER_COOKIE);
+}
+
 export async function getWorker() {
   const store = await cookies();
   const raw = store.get(WORKER_COOKIE)?.value;
@@ -61,6 +68,11 @@ export async function createAdminSession() {
     path: "/",
     expires: new Date(expires),
   });
+}
+
+export async function clearAdminSession() {
+  const store = await cookies();
+  store.delete(ADMIN_COOKIE);
 }
 
 export async function isAdmin() {

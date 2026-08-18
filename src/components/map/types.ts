@@ -5,4 +5,6 @@ export type MapTask = {
   lon: number;
   status: "TODO" | "ACTIVE" | "SUBMITTED" | "ACCEPTED" | "REJECTED";
   note?: string | null;
+  routeOrder?: number | null;
+  rejectionReason?: string | null;
 };
