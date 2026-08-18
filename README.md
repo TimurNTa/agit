@@ -4,6 +4,8 @@
 
 ## Основной сценарий штаба
 
+Штаб сразу открывается на большой рабочей карте. На компьютере действия находятся в компактной правой панели, а на телефоне — в нижней выдвижной панели.
+
 1. На карте поставить два угла территории.
 2. Выбрать агитатора.
 3. Нажать «Добавить, назначить и построить маршрут».
@@ -31,7 +33,7 @@ AGIT получает адресные точки OpenStreetMap через Overp
 
 ## Стек
 
-Next.js 16 / React 19 / TypeScript / Prisma 7 / PostgreSQL / Leaflet / OpenStreetMap / Overpass / Nominatim.
+Next.js 16 / React 19 / TypeScript / Prisma 7 / PostgreSQL / Leaflet / OpenStreetMap / Overpass / Nominatim / shadcn/ui-паттерны / Radix UI / Lucide.
 
 ## Развёртывание и обновление
 

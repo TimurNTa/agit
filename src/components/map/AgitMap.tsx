@@ -44,7 +44,7 @@ export function AgitMap({ tasks, selectedId, onSelect, userLocation }: {
       <Viewport tasks={tasks} selectedId={selectedId} userLocation={userLocation} />
       {route.length > 1 && <Polyline positions={route.map((task) => [task.lat, task.lon])} pathOptions={{ color: "#ff7a00", weight: 4, opacity: .78 }} />}
       {userLocation && (
-        <CircleMarker center={[userLocation.lat, userLocation.lon]} radius={9} pathOptions={{ color: "#ffffff", fillColor: "#3478f6", fillOpacity: 1, weight: 3 }}>
+        <CircleMarker center={[userLocation.lat, userLocation.lon]} radius={9} pathOptions={{ color: "#ffffff", fillColor: "#111111", fillOpacity: 1, weight: 3 }}>
           <Popup><strong>Вы здесь</strong></Popup>
         </CircleMarker>
       )}

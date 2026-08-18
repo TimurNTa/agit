@@ -1,8 +1,13 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { Camera, ClipboardList, History, HousePlus, LogOut, Map as MapIcon, MapPinned, Menu, RotateCcw, Users } from "lucide-react";
 import { AdminMapClient } from "@/components/admin/AdminMapClient";
 import type { MapCandidate, MapCorner } from "@/components/admin/AdminMap";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 type Tab = "overview" | "territory" | "tasks" | "team" | "reports" | "history";
 type House = { id: string; address: string; lat: number; lon: number; note?: string | null; source?: string | null; externalId?: string | null };
@@ -29,7 +34,7 @@ export function AdminDashboard() {
   const [password, setPassword] = useState("");
   const [notice, setNotice] = useState<{ text: string; danger?: boolean }>();
   const [loadError, setLoadError] = useState<string>();
-  const [tab, setTab] = useState<Tab>("overview");
+  const [tab, setTab] = useState<Tab>("territory");
   const [pickMode, setPickMode] = useState<"area" | "house">("area");
   const [areaCorners, setAreaCorners] = useState<MapCorner[]>([]);
   const [candidates, setCandidates] = useState<MapCandidate[]>([]);
@@ -51,6 +56,7 @@ export function AdminDashboard() {
   const [rejectingId, setRejectingId] = useState<string>();
   const [rejectComment, setRejectComment] = useState("");
   const [highlightReportId, setHighlightReportId] = useState<string>();
+  const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
 
   function show(text: string, danger = false) { setNotice({ text, danger }); }
   function goTab(next: Tab) { setTab(next); const url = new URL(window.location.href); url.searchParams.set("tab", next); url.searchParams.delete("report"); window.history.replaceState(null, "", url); }
@@ -73,7 +79,7 @@ export function AdminDashboard() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const requested = params.get("tab") as Tab | null;
-    if (requested && validTabs.has(requested)) setTab(requested);
+    if (requested && validTabs.has(requested)) setTab(requested === "overview" ? "territory" : requested);
     const report = params.get("report");
     if (report) { setTab("reports"); setHighlightReportId(report); setReportFilter("all"); }
     void load();
@@ -133,6 +139,7 @@ export function AdminDashboard() {
       if (result.stale) details.push("использована сохранённая копия");
       if (result.truncated) details.push("показаны первые 500 — уменьшите участок");
       show(`Готово — ${details.join(" · ")}`, Boolean(result.truncated));
+      if (window.matchMedia("(max-width: 900px)").matches) setMobilePanelOpen(true);
     } catch (error) {
       console.error("OSM discovery request failed", error);
       show("Сервисы OpenStreetMap сейчас не ответили. Нажмите «Повторить поиск домов».", true);
@@ -172,7 +179,7 @@ export function AdminDashboard() {
       ids = [...new Set([...ids, ...(result.houses || []).map((house: House) => house.id)])];
     }
     const ok = await assignHouses(ids, territoryAgitator, true);
-    if (ok) resetTerritory();
+    if (ok) { resetTerritory(); setMobilePanelOpen(false); }
     setBusy(false);
   }
   async function optimizeRoute(agitatorId: string) { if (!agitatorId) return; const response = await fetch("/api/admin/routes/optimize", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ agitatorId }) }); const result = await response.json().catch(() => ({})); show(response.ok ? `Маршрут обновлён: ${result.changed || 0} домов` : "Не удалось построить маршрут", !response.ok); setRouteAgitator(agitatorId); if (response.ok) await load(true); }
@@ -194,19 +201,73 @@ export function AdminDashboard() {
   async function deleteExported() { if (!window.confirm("Удалить с сервера фотографии всех подтверждённо выгруженных отчётов?")) return; const response = await fetch("/api/admin/photos/delete-exported", { method: "POST" }); const result = await response.json(); show(`Удалено файлов: ${result.deleted || 0}`); await load(true); }
   async function addRecipient(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const formEl = event.currentTarget; const form = new FormData(formEl); const response = await fetch("/api/admin/notifications", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: form.get("name"), vkId: form.get("vkId") }) }); const result = await response.json().catch(() => ({})); show(response.ok ? (result.testSent ? "Уведомления включены, тест отправлен" : "Получатель сохранён, но тестовое сообщение не доставлено") : "Не удалось включить уведомления", !response.ok || result.testSent === false); if (response.ok) { formEl.reset(); await load(true); } }
 
-  if (needsLogin) return <main className="shell"><div className="card admin-login"><div className="brand"><span className="brand-mark">A</span> AGIT / штаб</div><h2>Вход в штаб</h2><form className="form-grid" onSubmit={login}><label className="label">Пароль<input className="input" type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoFocus /></label><button className="btn btn-primary btn-large">Войти</button></form>{notice && <div className="notice notice-danger">{notice.text}</div>}</div></main>;
-  if (!data && loadError) return <main className="shell"><div className="card admin-login"><h2>Штаб временно недоступен</h2><p>{loadError}</p><button className="btn btn-primary" onClick={() => void load()}>Повторить</button></div></main>;
+  function renderTerritoryControls() {
+    return <div className="territory-panel">
+      <TabsList className="territory-mode-tabs">
+        <TabsTrigger active={pickMode === "area"} onClick={() => setPickMode("area")}><MapPinned size={16} />Территория</TabsTrigger>
+        <TabsTrigger active={pickMode === "house"} onClick={() => setPickMode("house")}><HousePlus size={16} />Один дом</TabsTrigger>
+      </TabsList>
+      {pickMode === "area" ? <>
+        <div className="territory-heading"><div><span className="eyebrow">БЫСТРОЕ НАЗНАЧЕНИЕ</span><h2>Три действия — и маршрут готов</h2></div><Badge variant={areaCorners.length === 2 ? "success" : "secondary"}>{areaCorners.length}/2 точки</Badge></div>
+        <ol className="simple-steps">
+          <li className={areaCorners.length === 2 ? "done" : ""}><b>1</b><span>Отметьте два угла<small>Нажмите на противоположные углы квартала</small></span></li>
+          <li className={territoryAgitator ? "done" : ""}><b>2</b><span>Выберите агитатора<select className="input" value={territoryAgitator} onChange={(event) => setTerritoryAgitator(event.target.value)}><option value="">Кому назначить</option>{activeAgitators.map((agitator) => <option key={agitator.id} value={agitator.id}>{agitator.name}</option>)}</select></span></li>
+          <li className={includedCandidates.length + selectedIds.length > 0 ? "done" : ""}><b>3</b><span>Подтвердите<small>{includedCandidates.length} новых + {selectedIds.length} существующих домов</small></span></li>
+        </ol>
+        {candidates.length > 0 && <div className="candidate-hint"><strong>Проверьте оранжевые точки</strong><span>Нажмите лишнюю точку на карте — она станет серой и не попадёт в маршрут.</span></div>}
+        <Button size="lg" className="full-width" disabled={busy || !territoryAgitator || (!includedCandidates.length && !selectedIds.length)} onClick={finalizeTerritory}><MapPinned size={18} />{busy ? "Подготавливаем…" : "Назначить и построить маршрут"}</Button>
+        <div className="territory-secondary-actions">
+          {areaCorners.length === 2 && <Button variant="outline" disabled={busy} onClick={() => void discover(areaCorners)}><RotateCcw size={16} />{busy ? "Ищем…" : "Обновить дома"}</Button>}
+          <Button variant="ghost" onClick={resetTerritory}>Сбросить</Button>
+        </div>
+      </> : <>
+        <div className="territory-heading"><div><span className="eyebrow">ТОЧЕЧНОЕ ДОБАВЛЕНИЕ</span><h2>Найдите или укажите дом</h2></div></div>
+        <form className="search-form" onSubmit={searchAddress}><input className="input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Улица и номер дома" /><Button variant="outline" type="submit">{searching ? "…" : "Найти"}</Button></form>
+        {searchResults.length > 0 && <div className="search-results">{searchResults.map((result, index) => <button key={`${result.lat}-${result.lon}-${index}`} onClick={() => chooseSearch(result)}><strong>{result.address}</strong><small>{result.label}</small></button>)}</div>}
+        <form className="form-grid" onSubmit={addHouse}>
+          <label className="label">Адрес<input className="input" required value={manualAddress} onChange={(event) => setManualAddress(event.target.value)} placeholder="ул. Мира, 12" /></label>
+          <label className="label">Что сделать<input className="input" name="note" placeholder="Расклейка / листовки" /></label>
+          <label className="label">Назначить<select className="input" name="agitatorId"><option value="">Пока никому</option>{activeAgitators.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+          {coords ? <div className="picked-point">Точка выбрана на карте</div> : <div className="map-pick-callout">Нажмите место дома на карте</div>}
+          <Button size="lg" className="full-width" type="submit" disabled={!coords}><HousePlus size={18} />Добавить дом</Button>
+        </form>
+      </>}
+    </div>;
+  }
+
+  const navItems = [
+    { id: "territory" as const, label: "Карта", icon: MapIcon },
+    { id: "tasks" as const, label: "Задания", icon: ClipboardList },
+    { id: "team" as const, label: "Команда", icon: Users },
+    { id: "reports" as const, label: "Отчёты", icon: Camera },
+    { id: "history" as const, label: "История", icon: History },
+  ];
+
+  if (needsLogin) return <main className="shell"><div className="card admin-login"><div className="brand"><span className="brand-mark">A</span> AGIT / штаб</div><h2>Вход в штаб</h2><p className="muted">Управление территорией и отчётами</p><form className="form-grid" onSubmit={login}><label className="label">Пароль<input className="input" type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoFocus /></label><Button size="lg" className="full-width" type="submit">Войти</Button></form>{notice && <div className="notice notice-danger">{notice.text}</div>}</div></main>;
+  if (!data && loadError) return <main className="shell"><div className="card admin-login"><h2>Штаб временно недоступен</h2><p>{loadError}</p><Button onClick={() => void load()}>Повторить</Button></div></main>;
   if (!data) return <main className="shell"><div className="loading-card">Загрузка штаба…</div></main>;
 
   return <main className="shell admin-shell">
-    <header className="admin-header"><div><div className="brand"><span className="brand-mark">A</span><span>AGIT / штаб</span></div><p className="muted admin-subtitle">Полевая работа без таблиц и ручной рутины</p></div><div className="btn-row"><a className="btn btn-ghost" href="/">Карта агитатора</a><button className="btn btn-ghost" onClick={logout}>Выйти</button></div></header>
-    <section className="admin-summary"><div><span className="eyebrow">ВЫПОЛНЕНО</span><strong>{accepted}/{data.assignments.length}</strong><small>домов принято</small></div><div><span className="eyebrow">В КОМАНДЕ</span><strong>{activeAgitators.length}</strong><small>активных</small></div><div><span className="eyebrow">ТРЕБУЮТ РЕШЕНИЯ</span><strong>{pendingReports}</strong><small>отчётов</small></div></section>
-    <nav className="admin-tabs" aria-label="Разделы штаба">{([['overview','Главная'],['territory','Территория'],['tasks','Задания'],['team','Команда'],['reports','Отчёты'],['history','История']] as Array<[Tab,string]>).map(([id,label]) => <button key={id} className={tab === id ? "active" : ""} onClick={() => goTab(id)}>{label}{id === "reports" && pendingReports > 0 && <b>{pendingReports}</b>}</button>)}</nav>
+    <header className="admin-header"><div><div className="brand"><span className="brand-mark">A</span><span>AGIT <i>/ штаб</i></span></div><p className="admin-subtitle">Территория, команда и отчёты на одной карте</p></div><div className="btn-row"><a className="btn btn-header" href="/"><MapIcon size={16} />Карта агитатора</a><Button variant="ghost" className="header-logout" onClick={logout}><LogOut size={16} />Выйти</Button></div></header>
+    <section className="admin-summary"><div><span className="summary-icon summary-icon-orange"><MapPinned size={18} /></span><span><small>Принято домов</small><strong>{accepted}<em> / {data.assignments.length}</em></strong></span></div><div><span className="summary-icon"><Users size={18} /></span><span><small>В команде</small><strong>{activeAgitators.length}</strong></span></div><div className={pendingReports ? "summary-alert" : ""}><span className="summary-icon"><Camera size={18} /></span><span><small>Ждут решения</small><strong>{pendingReports}</strong></span></div></section>
+    <TabsList className="admin-tabs" aria-label="Разделы штаба">{navItems.map(({ id, label, icon: Icon }) => <TabsTrigger key={id} active={tab === id} onClick={() => goTab(id)}><Icon size={18} /><span>{label}</span>{id === "reports" && pendingReports > 0 && <b>{pendingReports}</b>}</TabsTrigger>)}</TabsList>
     {notice && <div className={`notice ${notice.danger ? "notice-danger" : "notice-ok"} admin-notice`}>{notice.text}</div>}
 
     {tab === "overview" && <section className="dashboard-grid"><div className="workspace-card dashboard-hero"><span className="eyebrow">БЫСТРЫЙ СТАРТ</span><h1>Территория назначается одним действием</h1><p className="muted">Выделите квартал двумя точками, выберите агитатора и нажмите одну кнопку. Дома загрузятся, назначатся и выстроятся в маршрут.</p><button className="btn btn-primary btn-large" onClick={() => goTab("territory")}>Назначить территорию</button></div><div className="workspace-card"><span className="eyebrow">СЕЙЧАС</span><h2>{pendingReports ? `${pendingReports} отчётов ждут проверки` : "Новых отчётов нет"}</h2><button className="btn btn-ghost" onClick={() => goTab("reports")}>Открыть отчёты</button></div><div className="workspace-card dashboard-wide"><div className="section-heading"><div><span className="eyebrow">КОМАНДА</span><h2>Ход работы</h2></div></div><div className="team-progress-list">{data.agitators.map((agitator) => { const stat = data.stats.find((item) => item.agitatorId === agitator.id); return <div className="team-progress" key={agitator.id}><div><strong>{agitator.name}</strong><small>{stat?.accepted || 0} из {stat?.total || 0} принято</small></div><div className="mini-progress"><i style={{ width: `${stat?.completionRate || 0}%` }} /></div><b>{stat?.completionRate || 0}%</b></div>; })}</div></div></section>}
 
-    {tab === "territory" && <section className="admin-map-layout"><div className="admin-map-main"><div className="map-toolbar"><div><strong>{pickMode === "area" ? "Выделите квартал двумя точками" : "Нажмите точку нового дома"}</strong><span className="muted"> · существующий дом можно нажать для выбора</span></div><span className="map-count">{data.houses.length}</span></div><div className="admin-map-wrap"><AdminMapClient points={mapPoints} candidates={candidates} excludedCandidateIds={excludedCandidateIds} selectedIds={selectedIds} selectedPoint={coords} areaCorners={areaCorners} pickEnabled={!busy} onPick={mapPick} onToggle={toggleSelected} onToggleCandidate={toggleCandidate} focusPoint={focusPoint} route={route} /></div></div><aside className="admin-side-card territory-panel"><div className="mode-switch"><button className={pickMode === "area" ? "active" : ""} onClick={() => setPickMode("area")}>Территория</button><button className={pickMode === "house" ? "active" : ""} onClick={() => setPickMode("house")}>Один дом</button></div>{pickMode === "area" ? <><ol className="simple-steps"><li className={areaCorners.length ? "done" : ""}><b>1</b><span>Два угла квартала<small>{areaCorners.length}/2 точек</small></span></li><li className={territoryAgitator ? "done" : ""}><b>2</b><span>Кому назначить<select className="input" value={territoryAgitator} onChange={(event) => setTerritoryAgitator(event.target.value)}><option value="">Выберите агитатора</option>{activeAgitators.map((agitator) => <option key={agitator.id} value={agitator.id}>{agitator.name}</option>)}</select></span></li><li><b>3</b><span>Готово<small>{includedCandidates.length} новых + {selectedIds.length} существующих</small></span></li></ol>{candidates.length > 0 && <small className="candidate-hint">Синие точки будут добавлены. Нажмите лишнюю точку — она станет серой и не попадёт в задание.</small>}{areaCorners.length === 2 && <button className="btn btn-ghost" disabled={busy} onClick={() => void discover(areaCorners)}>{busy ? "Ищем дома…" : "Повторить поиск домов"}</button>}<button className="btn btn-primary btn-large" disabled={busy || !territoryAgitator || (!includedCandidates.length && !selectedIds.length)} onClick={finalizeTerritory}>{busy ? "Подготавливаем…" : "Добавить, назначить и построить маршрут"}</button><button className="btn btn-ghost" onClick={resetTerritory}>Начать заново</button></> : <><form className="search-form" onSubmit={searchAddress}><input className="input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Поиск улицы и дома" /><button className="btn btn-ghost">{searching ? "…" : "Найти"}</button></form>{searchResults.length > 0 && <div className="search-results">{searchResults.map((result, index) => <button key={`${result.lat}-${result.lon}-${index}`} onClick={() => chooseSearch(result)}><strong>{result.address}</strong><small>{result.label}</small></button>)}</div>}<form className="form-grid" onSubmit={addHouse}><label className="label">Адрес<input className="input" required value={manualAddress} onChange={(event) => setManualAddress(event.target.value)} placeholder="ул. Мира, 12" /></label><label className="label">Задание<input className="input" name="note" placeholder="Расклейка / листовки" /></label><label className="label">Назначить<select className="input" name="agitatorId"><option value="">Пока никому</option>{activeAgitators.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{coords && <div className="picked-point">✓ Точка выбрана</div>}<button className="btn btn-primary btn-large" disabled={!coords}>Добавить дом</button></form></>}</aside></section>}
+    {tab === "territory" && <section className="admin-map-layout">
+      <div className="admin-map-main">
+        <div className="map-toolbar">
+          <div><span className="eyebrow">РАБОЧАЯ КАРТА</span><strong>{pickMode === "area" ? (areaCorners.length === 2 ? "Территория найдена — проверьте дома" : "Нажмите два противоположных угла квартала") : "Нажмите точку нового дома"}</strong></div>
+          <div className="map-toolbar-actions"><Badge variant="outline">{data.houses.length} домов</Badge><Button className="mobile-panel-button" size="sm" onClick={() => setMobilePanelOpen(true)}><Menu size={16} />Действия</Button></div>
+        </div>
+        <div className="admin-map-wrap"><AdminMapClient points={mapPoints} candidates={candidates} excludedCandidateIds={excludedCandidateIds} selectedIds={selectedIds} selectedPoint={coords} areaCorners={areaCorners} pickEnabled={!busy} onPick={mapPick} onToggle={toggleSelected} onToggleCandidate={toggleCandidate} focusPoint={focusPoint} route={route} /></div>
+        <div className="map-bottom-status"><span><i className="legend-dot legend-new" />Новые из OSM</span><span><i className="legend-dot legend-selected" />Выбраны</span><span><i className="legend-dot legend-done" />Приняты</span></div>
+      </div>
+      <aside className="admin-side-card desktop-territory-panel">{renderTerritoryControls()}</aside>
+      <div className="mobile-territory-dock"><Button size="lg" className="full-width" onClick={() => setMobilePanelOpen(true)}><Menu size={18} />{areaCorners.length === 2 ? `Продолжить · ${includedCandidates.length + selectedIds.length} домов` : "Назначить территорию"}</Button></div>
+      <Sheet open={mobilePanelOpen} onOpenChange={setMobilePanelOpen}><SheetContent side="bottom" className="territory-sheet"><SheetHeader><SheetTitle>Работа с картой</SheetTitle><SheetDescription>Выделите дома и назначьте их агитатору</SheetDescription></SheetHeader>{renderTerritoryControls()}</SheetContent></Sheet>
+    </section>}
 
     {tab === "tasks" && <section className="workspace-card"><div className="section-heading"><div><span className="eyebrow">МАССОВОЕ УПРАВЛЕНИЕ</span><h2>Дома и исполнители</h2></div><input className="input compact-input" value={taskQuery} onChange={(event) => setTaskQuery(event.target.value)} placeholder="Найти адрес" /></div><div className="bulk-bar"><span>Выбрано: {selectedIds.length}</span><select className="input" value={bulkAgitator} onChange={(event) => setBulkAgitator(event.target.value)}><option value="">Кому назначить</option>{activeAgitators.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button className="btn btn-primary" onClick={() => void assignHouses(selectedIds, bulkAgitator, true)}>Назначить и построить маршрут</button><button className="btn btn-ghost" onClick={() => setSelectedIds([])}>Сбросить</button></div><div className="route-bar"><select className="input" value={routeAgitator} onChange={(event) => setRouteAgitator(event.target.value)}><option value="">Показать маршрут агитатора</option>{data.agitators.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button className="btn btn-ghost" disabled={!routeAgitator} onClick={() => optimizeRoute(routeAgitator)}>Перестроить маршрут</button></div>{routeAgitator && <div className="admin-route-preview"><AdminMapClient points={mapPoints} selectedIds={selectedIds} pickEnabled={false} onPick={() => undefined} onToggle={toggleSelected} route={route} /></div>}<div className="assignment-list">{filteredTasks.map((house) => { const assignment = assignmentByHouse.get(house.id); const locked = assignment && ["ACTIVE","SUBMITTED","ACCEPTED"].includes(assignment.status); return <div className={`assignment-row ${selectedIds.includes(house.id) ? "selected" : ""}`} key={house.id}><input type="checkbox" checked={selectedIds.includes(house.id)} onChange={() => toggleSelected(house.id)} aria-label={`Выбрать ${house.address}`} /><div className="assignment-copy"><strong>{house.address}</strong><small>{assignment ? `${statusText[assignment.status] || assignment.status}${assignment.routeOrder ? ` · №${assignment.routeOrder}` : ""}` : "Не назначено"}</small></div><select className="input assignment-select" value={assignment?.agitatorId || ""} disabled={Boolean(locked)} onChange={(event) => void assignOne(house.id, event.target.value)}><option value="">Без назначения</option>{activeAgitators.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>; })}</div></section>}
 

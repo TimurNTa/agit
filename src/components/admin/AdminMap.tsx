@@ -48,7 +48,7 @@ export function AdminMap({ points, candidates = [], excludedCandidateIds = [], s
     {selectedPoint && <CircleMarker center={[selectedPoint.lat, selectedPoint.lon]} radius={10} pathOptions={{ color: "#fff", fillColor: "#ff7a00", fillOpacity: 1, weight: 4 }}><Popup><strong>Новая точка</strong></Popup></CircleMarker>}
     {candidates.map((candidate) => {
       const excluded = excludedCandidates.has(candidate.externalId);
-      return <CircleMarker key={candidate.externalId} center={[candidate.lat, candidate.lon]} radius={excluded ? 5 : 7} pathOptions={{ color: excluded ? "#7b8490" : "#fff", fillColor: excluded ? "#7b8490" : "#3478f6", fillOpacity: excluded ? .35 : .9, weight: 2 }} bubblingMouseEvents={false} eventHandlers={{ click: () => onToggleCandidate?.(candidate.externalId) }}><Popup><strong>{candidate.address}</strong><br />{excluded ? "Исключён. Нажмите ещё раз, чтобы вернуть." : "Будет добавлен. Нажмите, чтобы исключить."}</Popup></CircleMarker>;
+      return <CircleMarker key={candidate.externalId} center={[candidate.lat, candidate.lon]} radius={excluded ? 5 : 7} pathOptions={{ color: excluded ? "#7b8490" : "#fff", fillColor: excluded ? "#7b8490" : "#ff6b00", fillOpacity: excluded ? .35 : .92, weight: 2 }} bubblingMouseEvents={false} eventHandlers={{ click: () => onToggleCandidate?.(candidate.externalId) }}><Popup><strong>{candidate.address}</strong><br />{excluded ? "Исключён. Нажмите ещё раз, чтобы вернуть." : "Будет добавлен. Нажмите, чтобы исключить."}</Popup></CircleMarker>;
     })}
     {points.map((point) => {
       const isSelected = selected.has(point.id);
